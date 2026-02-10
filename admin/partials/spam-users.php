@@ -214,6 +214,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 			<?php echo sprintf( esc_html__( 'Total de usuarios en la lista: %d', 'users-toolkit' ), count( $spam_users ) ); ?>
 			<span id="users-toolkit-visible-count" style="margin-left: 15px; font-weight: bold; color: #2271b1;"></span>
 		</p>
+		<?php
+		$country_options = array();
+		foreach ( $spam_users as $spam_user_item ) {
+			$country_value = isset( $spam_user_item['country'] ) ? trim( (string) $spam_user_item['country'] ) : '';
+			if ( '' === $country_value ) {
+				continue;
+			}
+			$country_key = strtolower( $country_value );
+			if ( ! isset( $country_options[ $country_key ] ) ) {
+				$country_options[ $country_key ] = $country_value;
+			}
+		}
+		if ( ! empty( $country_options ) ) {
+			natcasesort( $country_options );
+		}
+		$has_country_options = ! empty( $country_options );
+		?>
 
 		<!-- Panel de Acciones Mejorado -->
 		<div class="users-toolkit-action-panel" style="margin: 20px 0; padding: 20px; background: #f9f9f9; border: 2px solid #2271b1; border-radius: 8px;">
@@ -285,10 +302,41 @@ if ( ! defined( 'ABSPATH' ) ) {
 					<input type="text" id="users-toolkit-filter-first-name" placeholder="<?php esc_attr_e( 'Nombre', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
 					<input type="text" id="users-toolkit-filter-last-name" placeholder="<?php esc_attr_e( 'Apellido', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
 					<input type="text" id="users-toolkit-filter-city" placeholder="<?php esc_attr_e( 'Ciudad', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
-					<input type="text" id="users-toolkit-filter-country" placeholder="<?php esc_attr_e( 'País', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-filter-country" placeholder="<?php esc_attr_e( 'País (texto)', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+				</div>
+				<div style="display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 8px; margin-top: 10px; align-items: start;">
+					<div>
+						<label for="users-toolkit-filter-country-multi" style="display: block; font-size: 12px; color: #50575e; margin-bottom: 4px; font-weight: 600;">
+							<?php esc_html_e( 'Filtrar por país(es) exactos:', 'users-toolkit' ); ?>
+						</label>
+						<select id="users-toolkit-filter-country-multi" multiple size="6" style="width: 100%; padding: 6px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;" <?php disabled( $has_country_options, false ); ?>>
+							<?php if ( $has_country_options ) : ?>
+								<?php foreach ( $country_options as $country_option ) : ?>
+									<option value="<?php echo esc_attr( $country_option ); ?>"><?php echo esc_html( $country_option ); ?></option>
+								<?php endforeach; ?>
+							<?php else : ?>
+								<option value="" disabled><?php esc_html_e( 'No hay países disponibles en esta lista', 'users-toolkit' ); ?></option>
+							<?php endif; ?>
+						</select>
+						<p style="margin: 5px 0 0 0; font-size: 11px; color: #646970;">
+							<?php esc_html_e( 'Usa Ctrl/Cmd para seleccionar varios países.', 'users-toolkit' ); ?>
+						</p>
+					</div>
+					<div style="display: flex; flex-direction: column; gap: 6px; min-width: 220px;">
+						<button type="button" id="users-toolkit-select-latam" class="button button-small" <?php disabled( $has_country_options, false ); ?>>
+							<?php esc_html_e( 'Seleccionar MX + LATAM', 'users-toolkit' ); ?>
+						</button>
+						<button type="button" id="users-toolkit-clear-country-multi" class="button button-small" <?php disabled( $has_country_options, false ); ?>>
+							<?php esc_html_e( 'Limpiar países seleccionados', 'users-toolkit' ); ?>
+						</button>
+						<label for="users-toolkit-filter-country-exclude" style="font-size: 12px; color: #50575e;">
+							<input type="checkbox" id="users-toolkit-filter-country-exclude">
+							<?php esc_html_e( 'Excluir países seleccionados', 'users-toolkit' ); ?>
+						</label>
+					</div>
 				</div>
 				<p style="margin: 8px 0 0 0; font-size: 12px; color: #646970;">
-					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. También puedes usar filtros rápidos por nombre, apellido, ciudad y país. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
+					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. También puedes usar filtros rápidos por nombre, apellido, ciudad y país, incluyendo selección de varios países. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
 				</p>
 			</div>
 			

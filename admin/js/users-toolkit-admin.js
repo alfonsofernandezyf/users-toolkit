@@ -1424,17 +1424,58 @@
 			}
 		}
 		
+		function normalizeFilterText(value) {
+			var normalized = (value || '').toString().toLowerCase().trim();
+			if (normalized && typeof normalized.normalize === 'function') {
+				normalized = normalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+			}
+			return normalized;
+		}
+
+		var latamCountryAliases = [
+			'mx', 'mexico', 'méxico',
+			'ar', 'argentina',
+			'bo', 'bolivia',
+			'br', 'brazil', 'brasil',
+			'cl', 'chile',
+			'co', 'colombia',
+			'cr', 'costa rica',
+			'cu', 'cuba',
+			'do', 'dominican republic', 'republica dominicana', 'república dominicana',
+			'ec', 'ecuador',
+			'sv', 'el salvador',
+			'gt', 'guatemala',
+			'hn', 'honduras',
+			'ni', 'nicaragua',
+			'pa', 'panama', 'panamá',
+			'py', 'paraguay',
+			'pe', 'peru', 'perú',
+			'pr', 'puerto rico',
+			'uy', 'uruguay',
+			've', 'venezuela'
+		];
+		var latamCountryAliasesMap = {};
+		latamCountryAliases.forEach(function(alias) {
+			latamCountryAliasesMap[normalizeFilterText(alias)] = true;
+		});
+
 		function applySpamUsersFilters() {
-			var searchText = ($('#users-toolkit-search-input').val() || '').toLowerCase().trim();
-			var firstNameFilter = ($('#users-toolkit-filter-first-name').val() || '').toLowerCase().trim();
-			var lastNameFilter = ($('#users-toolkit-filter-last-name').val() || '').toLowerCase().trim();
-			var cityFilter = ($('#users-toolkit-filter-city').val() || '').toLowerCase().trim();
-			var countryFilter = ($('#users-toolkit-filter-country').val() || '').toLowerCase().trim();
+			var searchText = normalizeFilterText($('#users-toolkit-search-input').val());
+			var firstNameFilter = normalizeFilterText($('#users-toolkit-filter-first-name').val());
+			var lastNameFilter = normalizeFilterText($('#users-toolkit-filter-last-name').val());
+			var cityFilter = normalizeFilterText($('#users-toolkit-filter-city').val());
+			var countryFilter = normalizeFilterText($('#users-toolkit-filter-country').val());
+			var selectedCountries = ($('#users-toolkit-filter-country-multi').val() || []).map(function(country) {
+				return normalizeFilterText(country);
+			}).filter(function(country) {
+				return country !== '';
+			});
+			var excludeSelectedCountries = $('#users-toolkit-filter-country-exclude').prop('checked');
 			var $table = $('#users-toolkit-spam-table');
 			var $rows = $table.find('tbody tr');
 			var $clearButton = $('#users-toolkit-clear-search');
 			
-			var hasAnyFilter = searchText !== '' || firstNameFilter !== '' || lastNameFilter !== '' || cityFilter !== '' || countryFilter !== '';
+			var hasAnyFilter = searchText !== '' || firstNameFilter !== '' || lastNameFilter !== '' || cityFilter !== '' || countryFilter !== '' || selectedCountries.length > 0;
 			if (!hasAnyFilter) {
 				$rows.show();
 				$clearButton.hide();
@@ -1442,18 +1483,30 @@
 				$clearButton.show();
 				$rows.each(function() {
 					var $row = $(this);
-					var rowText = $row.text().toLowerCase();
-					var firstName = ($row.attr('data-first_name') || '').toLowerCase();
-					var lastName = ($row.attr('data-last_name') || '').toLowerCase();
-					var city = ($row.attr('data-city') || '').toLowerCase();
-					var country = ($row.attr('data-country') || '').toLowerCase();
+					var rowText = normalizeFilterText($row.text());
+					var firstName = normalizeFilterText($row.attr('data-first_name'));
+					var lastName = normalizeFilterText($row.attr('data-last_name'));
+					var city = normalizeFilterText($row.attr('data-city'));
+					var country = normalizeFilterText($row.attr('data-country'));
 
 					var matchesSearch = (searchText === '' || rowText.indexOf(searchText) !== -1);
 					var matchesFirstName = (firstNameFilter === '' || firstName.indexOf(firstNameFilter) !== -1);
 					var matchesLastName = (lastNameFilter === '' || lastName.indexOf(lastNameFilter) !== -1);
 					var matchesCity = (cityFilter === '' || city.indexOf(cityFilter) !== -1);
 					var matchesCountry = (countryFilter === '' || country.indexOf(countryFilter) !== -1);
-					var isVisible = matchesSearch && matchesFirstName && matchesLastName && matchesCity && matchesCountry;
+					var matchesCountryList = true;
+
+					if (selectedCountries.length > 0) {
+						var countryFound = selectedCountries.some(function(selectedCountry) {
+							if (!selectedCountry) {
+								return false;
+							}
+							return country === selectedCountry || country.indexOf(selectedCountry) !== -1 || selectedCountry.indexOf(country) !== -1;
+						});
+						matchesCountryList = excludeSelectedCountries ? !countryFound : countryFound;
+					}
+
+					var isVisible = matchesSearch && matchesFirstName && matchesLastName && matchesCity && matchesCountry && matchesCountryList;
 
 					$row.toggle(isVisible);
 				});
@@ -1464,7 +1517,37 @@
 		}
 
 		// Búsqueda/filtrado en la tabla de usuarios spam
-		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country').on('keyup change', function() {
+		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country, #users-toolkit-filter-country-multi, #users-toolkit-filter-country-exclude').on('keyup change', function() {
+			applySpamUsersFilters();
+		});
+
+		$('#users-toolkit-select-latam').on('click', function() {
+			var $countrySelect = $('#users-toolkit-filter-country-multi');
+			if ($countrySelect.length === 0 || $countrySelect.prop('disabled')) {
+				return;
+			}
+
+			$countrySelect.find('option').prop('selected', false);
+			$countrySelect.find('option').each(function() {
+				var $option = $(this);
+				var optionText = normalizeFilterText($option.text());
+				var optionValue = normalizeFilterText($option.val());
+				if (latamCountryAliasesMap[optionText] || latamCountryAliasesMap[optionValue]) {
+					$option.prop('selected', true);
+				}
+			});
+
+			$('#users-toolkit-filter-country-exclude').prop('checked', false);
+			applySpamUsersFilters();
+		});
+
+		$('#users-toolkit-clear-country-multi').on('click', function() {
+			var $countrySelect = $('#users-toolkit-filter-country-multi');
+			if ($countrySelect.length === 0) {
+				return;
+			}
+			$countrySelect.find('option').prop('selected', false);
+			$('#users-toolkit-filter-country-exclude').prop('checked', false);
 			applySpamUsersFilters();
 		});
 		
@@ -1475,18 +1558,22 @@
 			$('#users-toolkit-filter-last-name').val('');
 			$('#users-toolkit-filter-city').val('');
 			$('#users-toolkit-filter-country').val('');
+			$('#users-toolkit-filter-country-multi option').prop('selected', false);
+			$('#users-toolkit-filter-country-exclude').prop('checked', false);
 			applySpamUsersFilters();
 			$(this).hide();
 		});
 		
 		// Limpiar búsqueda con tecla Escape
-		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country').on('keydown', function(e) {
+		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country, #users-toolkit-filter-country-multi').on('keydown', function(e) {
 			if (e.key === 'Escape') {
 				$('#users-toolkit-search-input').val('');
 				$('#users-toolkit-filter-first-name').val('');
 				$('#users-toolkit-filter-last-name').val('');
 				$('#users-toolkit-filter-city').val('');
 				$('#users-toolkit-filter-country').val('');
+				$('#users-toolkit-filter-country-multi option').prop('selected', false);
+				$('#users-toolkit-filter-country-exclude').prop('checked', false);
 				applySpamUsersFilters();
 				$('#users-toolkit-clear-search').hide();
 			}

@@ -2,7 +2,7 @@
 
 Plugin de WordPress para identificar usuarios potencialmente spam, ejecutar acciones masivas de usuarios y mantener la base de datos optimizada con respaldo previo.
 
-**Versión:** `1.2.0`  
+**Versión:** `1.3.0`  
 **Autor:** Alfonso Fernández  
 **Email:** alfonso@cientifi.ca
 
@@ -31,6 +31,10 @@ Plugin de WordPress para identificar usuarios potencialmente spam, ejecutar acci
 - Modo de coincidencia:
   - Coincidir con todos los criterios
   - Coincidir con cualquiera de los criterios
+- Filtros avanzados en resultados:
+  - País único o múltiples países
+  - Inclusión o exclusión de países seleccionados
+  - Atajo de selección `MX + LATAM`
 - Acciones sobre usuarios:
   - Simulación (dry run)
   - Exportación con metadatos
