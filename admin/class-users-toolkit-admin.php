@@ -1287,6 +1287,184 @@ class Users_Toolkit_Admin {
 	}
 
 	/**
+	 * Try to recover a pending identify operation stuck at queue/start stage.
+	 *
+	 * @param string     $operation_id Operation identifier.
+	 * @param array|bool $progress     Current progress.
+	 * @return array|bool
+	 */
+	private function maybe_recover_pending_identify_progress( $operation_id, $progress ) {
+		if ( ! $this->is_valid_identify_operation_id( $operation_id ) ) {
+			return $progress;
+		}
+
+		$token = get_transient( $this->get_identify_worker_token_key( $operation_id ) );
+		$payload = get_transient( $this->get_identify_worker_payload_key( $operation_id ) );
+		$lock = get_transient( $this->get_identify_worker_lock_key( $operation_id ) );
+		$pending = ( ( is_string( $token ) && '' !== $token && false !== $payload ) || $lock );
+
+		if ( ! $pending ) {
+			return $progress;
+		}
+
+		if ( ! is_array( $progress ) ) {
+			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 2, __( 'Búsqueda en cola o iniciando en segundo plano...', 'users-toolkit' ), false );
+			$progress = Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		if ( ! is_array( $progress ) || ! empty( $progress['completed'] ) ) {
+			return $progress;
+		}
+
+		$current = isset( $progress['current'] ) ? (int) $progress['current'] : 0;
+		if ( $current > 2 ) {
+			return $progress;
+		}
+
+		$now = time();
+		$last_update = isset( $progress['timestamp'] ) ? (int) $progress['timestamp'] : 0;
+		$age = $last_update > 0 ? ( $now - $last_update ) : 0;
+		$retry_key = 'users_toolkit_identify_retry_' . $operation_id;
+		$last_retry = (int) get_transient( $retry_key );
+
+		// No reintentar demasiado pronto.
+		if ( $last_retry > 0 && ( $now - $last_retry ) < 45 ) {
+			if ( $age > 1200 ) {
+				Users_Toolkit_Progress_Tracker::set_progress(
+					$operation_id,
+					100,
+					__( 'No se pudo iniciar la búsqueda en segundo plano. Revisa loopback y WP-Cron del servidor.', 'users-toolkit' ),
+					true,
+					array( 'error' => true )
+				);
+				return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+			}
+			return $progress;
+		}
+
+		set_transient( $retry_key, $now, 900 );
+
+		$dispatched = false;
+		$scheduled = false;
+		if ( is_string( $token ) && '' !== $token && ! $lock ) {
+			$dispatched = $this->dispatch_identify_worker_request( $operation_id, $token );
+			$scheduled = $this->schedule_identify_worker_event( $operation_id, $token, 5 );
+		}
+
+		if ( $dispatched || $scheduled ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				3,
+				__( 'Reintentando iniciar búsqueda en segundo plano...', 'users-toolkit' ),
+				false,
+				array( 'retrying' => true )
+			);
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		if ( $age > 1200 ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se pudo iniciar la búsqueda en segundo plano. Revisa loopback y WP-Cron del servidor.', 'users-toolkit' ),
+				true,
+				array( 'error' => true )
+			);
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		return $progress;
+	}
+
+	/**
+	 * Try to recover a pending backup operation stuck at queue/start stage.
+	 *
+	 * @param string     $operation_id Operation identifier.
+	 * @param array|bool $progress     Current progress.
+	 * @return array|bool
+	 */
+	private function maybe_recover_pending_backup_progress( $operation_id, $progress ) {
+		if ( ! $this->is_valid_backup_operation_id( $operation_id ) ) {
+			return $progress;
+		}
+
+		$token = get_transient( $this->get_backup_worker_token_key( $operation_id ) );
+		$lock = get_transient( $this->get_backup_worker_lock_key( $operation_id ) );
+		$pending = ( ( is_string( $token ) && '' !== $token ) || $lock );
+
+		if ( ! $pending ) {
+			return $progress;
+		}
+
+		if ( ! is_array( $progress ) ) {
+			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 2, __( 'Backup en cola o iniciando en segundo plano...', 'users-toolkit' ), false );
+			$progress = Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		if ( ! is_array( $progress ) || ! empty( $progress['completed'] ) ) {
+			return $progress;
+		}
+
+		$current = isset( $progress['current'] ) ? (int) $progress['current'] : 0;
+		if ( $current > 2 ) {
+			return $progress;
+		}
+
+		$now = time();
+		$last_update = isset( $progress['timestamp'] ) ? (int) $progress['timestamp'] : 0;
+		$age = $last_update > 0 ? ( $now - $last_update ) : 0;
+		$retry_key = 'users_toolkit_backup_retry_' . $operation_id;
+		$last_retry = (int) get_transient( $retry_key );
+
+		if ( $last_retry > 0 && ( $now - $last_retry ) < 45 ) {
+			if ( $age > 1200 ) {
+				Users_Toolkit_Progress_Tracker::set_progress(
+					$operation_id,
+					100,
+					__( 'No se pudo iniciar el backup en segundo plano. Revisa loopback y WP-Cron del servidor.', 'users-toolkit' ),
+					true,
+					array( 'error' => true )
+				);
+				return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+			}
+			return $progress;
+		}
+
+		set_transient( $retry_key, $now, 900 );
+
+		$dispatched = false;
+		$scheduled = false;
+		if ( is_string( $token ) && '' !== $token && ! $lock ) {
+			$dispatched = $this->dispatch_backup_worker_request( $operation_id, $token );
+			$scheduled = $this->schedule_backup_worker_event( $operation_id, $token, 5 );
+		}
+
+		if ( $dispatched || $scheduled ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				3,
+				__( 'Reintentando iniciar backup en segundo plano...', 'users-toolkit' ),
+				false,
+				array( 'retrying' => true )
+			);
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		if ( $age > 1200 ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se pudo iniciar el backup en segundo plano. Revisa loopback y WP-Cron del servidor.', 'users-toolkit' ),
+				true,
+				array( 'error' => true )
+			);
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
+
+		return $progress;
+	}
+
+	/**
 	 * AJAX handler for getting progress
 	 */
 	public function ajax_get_progress() {
@@ -1296,13 +1474,15 @@ class Users_Toolkit_Admin {
 			wp_send_json_error( array( 'message' => __( 'Permisos insuficientes', 'users-toolkit' ) ) );
 		}
 
-		$operation_id = isset( $_POST['operation_id'] ) ? sanitize_text_field( $_POST['operation_id'] ) : '';
+		$operation_id = isset( $_POST['operation_id'] ) ? sanitize_key( wp_unslash( $_POST['operation_id'] ) ) : '';
 
 		if ( empty( $operation_id ) ) {
 			wp_send_json_error( array( 'message' => __( 'ID de operación no proporcionado', 'users-toolkit' ) ) );
 		}
 
 		$progress = Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		$progress = $this->maybe_recover_pending_identify_progress( $operation_id, $progress );
+		$progress = $this->maybe_recover_pending_backup_progress( $operation_id, $progress );
 
 		if ( $progress === false ) {
 			$is_identify_pending = (

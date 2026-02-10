@@ -47,11 +47,12 @@
 				var pollInterval = null;
 				var pollErrors = 0;
 
-			$button.prop('disabled', true).html('<span class="users-toolkit-loading"></span> ' + usersToolkit.strings.identifying);
-			$results.hide();
-			$progressContainer.show();
-			$progressLog.html('');
-			updateProgress($progressBar, $progressMsg, $progressLog, 0, usersToolkit.strings.identifying);
+				$button.prop('disabled', true).html('<span class="users-toolkit-loading"></span> ' + usersToolkit.strings.identifying);
+				$results.hide();
+				$progressContainer.show();
+				$progressLog.html('');
+				$progressLog.removeData('usersToolkitLastMessage').removeData('usersToolkitLastPercent');
+				updateProgress($progressBar, $progressMsg, $progressLog, 0, usersToolkit.strings.identifying);
 
 			// Función de polling para obtener progreso
 			function startPolling(operation_id) {
@@ -960,6 +961,13 @@
 				$msg.text(message);
 			}
 			if ($log && message) {
+				var lastMessage = $log.data('usersToolkitLastMessage');
+				var lastPercent = $log.data('usersToolkitLastPercent');
+				if (lastMessage === message && Number(lastPercent) === Number(percent)) {
+					return;
+				}
+				$log.data('usersToolkitLastMessage', message);
+				$log.data('usersToolkitLastPercent', percent);
 				var timestamp = new Date().toLocaleTimeString();
 				var logEntry = $('<p>').text('[' + timestamp + '] ' + message);
 				$log.append(logEntry);
@@ -980,11 +988,12 @@
 				var pollInterval = null;
 				var pollErrors = 0;
 
-				$button.prop('disabled', true).html('<span class="users-toolkit-loading"></span> Creando backup...');
-				$results.hide();
-				$progressContainer.show();
-				$progressLog.html('');
-				updateProgress($progressBar, $progressMsg, $progressLog, 0, 'Iniciando backup...');
+					$button.prop('disabled', true).html('<span class="users-toolkit-loading"></span> Creando backup...');
+					$results.hide();
+					$progressContainer.show();
+					$progressLog.html('');
+					$progressLog.removeData('usersToolkitLastMessage').removeData('usersToolkitLastPercent');
+					updateProgress($progressBar, $progressMsg, $progressLog, 0, 'Iniciando backup...');
 
 			// Función de polling para obtener progreso
 			function startPolling(operation_id) {
