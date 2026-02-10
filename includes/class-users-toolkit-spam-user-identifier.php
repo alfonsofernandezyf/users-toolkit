@@ -9,8 +9,8 @@ class Users_Toolkit_Spam_User_Identifier {
 	 * Identify spam users based on criteria
 	 *
 	 * @param string $operation_id         Optional operation ID for progress tracking
-	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments'
-	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments'
+	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads'
+	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads'
 	 * @param bool   $match_all            If true, user must match ALL criteria. If false, match ANY criterion.
 	 * @param array  $post_types_positive  Optional array of post types user must be author of
 	 * @param array  $post_types_negative  Optional array of post types user must NOT be author of
@@ -35,6 +35,82 @@ class Users_Toolkit_Spam_User_Identifier {
 		$has_negative_criteria = ! empty( $criteria_negative ) || ! empty( $post_types_negative );
 		$has_role_filter = ! empty( $user_roles );
 		$use_default_inactive_mode = ! $has_positive_criteria && ! $has_negative_criteria && ! $has_role_filter;
+		$all_user_ids = array();
+		$email_to_user_ids_map = array();
+		$user_profile_map = array();
+
+		foreach ( (array) $all_users as $user_row ) {
+			$user_id = isset( $user_row['ID'] ) ? (int) $user_row['ID'] : 0;
+			if ( $user_id <= 0 ) {
+				continue;
+			}
+
+			$user_email = isset( $user_row['user_email'] ) ? strtolower( trim( (string) $user_row['user_email'] ) ) : '';
+
+			$all_user_ids[] = $user_id;
+			if ( ! empty( $user_email ) ) {
+				if ( ! isset( $email_to_user_ids_map[ $user_email ] ) ) {
+					$email_to_user_ids_map[ $user_email ] = array();
+				}
+				$email_to_user_ids_map[ $user_email ][] = $user_id;
+			}
+
+			$user_profile_map[ $user_id ] = array(
+				'first_name' => '',
+				'last_name'  => '',
+				'city'       => '',
+				'country'    => '',
+			);
+		}
+
+		$profile_meta_keys = array( 'first_name', 'last_name', 'billing_city', 'city', 'billing_country', 'country' );
+		if ( ! empty( $all_user_ids ) ) {
+			foreach ( array_chunk( $all_user_ids, 400 ) as $user_ids_chunk ) {
+				$id_placeholders = implode( ',', array_fill( 0, count( $user_ids_chunk ), '%d' ) );
+				$key_placeholders = implode( ',', array_fill( 0, count( $profile_meta_keys ), '%s' ) );
+
+				$sql_args = array_merge(
+					array( "SELECT user_id, meta_key, meta_value FROM {$wpdb->usermeta} WHERE user_id IN ({$id_placeholders}) AND meta_key IN ({$key_placeholders})" ),
+					$user_ids_chunk,
+					$profile_meta_keys
+				);
+				$meta_sql = call_user_func_array( array( $wpdb, 'prepare' ), $sql_args );
+				$meta_rows = $wpdb->get_results( $meta_sql, ARRAY_A );
+
+				foreach ( (array) $meta_rows as $meta_row ) {
+					$uid = isset( $meta_row['user_id'] ) ? (int) $meta_row['user_id'] : 0;
+					if ( $uid <= 0 || ! isset( $user_profile_map[ $uid ] ) ) {
+						continue;
+					}
+
+					$meta_key = isset( $meta_row['meta_key'] ) ? (string) $meta_row['meta_key'] : '';
+					$meta_value_raw = isset( $meta_row['meta_value'] ) ? maybe_unserialize( $meta_row['meta_value'] ) : '';
+					if ( is_scalar( $meta_value_raw ) ) {
+						$meta_value = trim( wp_strip_all_tags( (string) $meta_value_raw ) );
+					} else {
+						$meta_value = '';
+					}
+
+					if ( '' === $meta_value ) {
+						continue;
+					}
+
+					if ( 'first_name' === $meta_key ) {
+						$user_profile_map[ $uid ]['first_name'] = $meta_value;
+					} elseif ( 'last_name' === $meta_key ) {
+						$user_profile_map[ $uid ]['last_name'] = $meta_value;
+					} elseif ( 'billing_city' === $meta_key ) {
+						$user_profile_map[ $uid ]['city'] = $meta_value;
+					} elseif ( 'city' === $meta_key && '' === $user_profile_map[ $uid ]['city'] ) {
+						$user_profile_map[ $uid ]['city'] = $meta_value;
+					} elseif ( 'billing_country' === $meta_key ) {
+						$user_profile_map[ $uid ]['country'] = $meta_value;
+					} elseif ( 'country' === $meta_key && '' === $user_profile_map[ $uid ]['country'] ) {
+						$user_profile_map[ $uid ]['country'] = $meta_value;
+					}
+				}
+			}
+		}
 
 		/*
 		 * Mapa de roles/capacidades sin instanciar WP_User por cada ID.
@@ -130,6 +206,7 @@ class Users_Toolkit_Spam_User_Identifier {
 		$posts_count_cache = array();
 		$post_type_cache = array();
 		$any_content_cache = array();
+		$dlm_downloads_count_cache = array();
 
 		$activity_table = $wpdb->prefix . 'learndash_user_activity';
 		$activity_table_exists = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $activity_table ) ) === $activity_table );
@@ -138,6 +215,100 @@ class Users_Toolkit_Spam_User_Identifier {
 		$orders_table_has_status = false;
 		if ( $orders_table_exists ) {
 			$orders_table_has_status = ! empty( $wpdb->get_results( "SHOW COLUMNS FROM {$orders_table} LIKE 'status'" ) );
+		}
+
+		$dlm_download_table = '';
+		$dlm_download_user_id_column = '';
+		$dlm_download_email_column = '';
+		$needs_dlm_lookup = in_array( 'dlm_downloads', $criteria_positive, true ) || in_array( 'dlm_downloads', $criteria_negative, true ) || $use_default_inactive_mode;
+		$dlm_candidate_tables = array(
+			$wpdb->prefix . 'dlm_download_log',
+			$wpdb->prefix . 'download_log',
+		);
+		foreach ( $dlm_candidate_tables as $candidate_table ) {
+			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $candidate_table ) ) === $candidate_table ) {
+				$dlm_download_table = $candidate_table;
+				break;
+			}
+		}
+
+		if ( $needs_dlm_lookup && ! empty( $dlm_download_table ) ) {
+			$table_columns = $wpdb->get_col( "SHOW COLUMNS FROM `{$dlm_download_table}`", 0 );
+			$table_columns = is_array( $table_columns ) ? $table_columns : array();
+
+			$id_column_candidates = array( 'user_id', 'userid', 'member_id', 'customer_id', 'user' );
+			foreach ( $id_column_candidates as $column_name ) {
+				if ( in_array( $column_name, $table_columns, true ) ) {
+					$dlm_download_user_id_column = $column_name;
+					break;
+				}
+			}
+
+			$email_column_candidates = array( 'user_email', 'email', 'user_mail' );
+			foreach ( $email_column_candidates as $column_name ) {
+				if ( in_array( $column_name, $table_columns, true ) ) {
+					$dlm_download_email_column = $column_name;
+					break;
+				}
+			}
+
+			if ( ! empty( $dlm_download_user_id_column ) && ! empty( $all_user_ids ) ) {
+				foreach ( array_chunk( $all_user_ids, 500 ) as $user_ids_chunk ) {
+					$id_placeholders = implode( ',', array_fill( 0, count( $user_ids_chunk ), '%d' ) );
+					$sql_args = array_merge(
+						array( "SELECT `{$dlm_download_user_id_column}` AS user_key, COUNT(*) AS downloads_count FROM `{$dlm_download_table}` WHERE `{$dlm_download_user_id_column}` IN ({$id_placeholders}) GROUP BY `{$dlm_download_user_id_column}`" ),
+						$user_ids_chunk
+					);
+					$downloads_sql = call_user_func_array( array( $wpdb, 'prepare' ), $sql_args );
+					$download_rows = $wpdb->get_results( $downloads_sql, ARRAY_A );
+
+					foreach ( (array) $download_rows as $download_row ) {
+						$uid = isset( $download_row['user_key'] ) ? (int) $download_row['user_key'] : 0;
+						if ( $uid <= 0 ) {
+							continue;
+						}
+						$dlm_downloads_count_cache[ $uid ] = isset( $download_row['downloads_count'] ) ? (int) $download_row['downloads_count'] : 0;
+					}
+				}
+			}
+
+			if ( ! empty( $dlm_download_email_column ) && ! empty( $email_to_user_ids_map ) ) {
+				$all_emails = array_keys( $email_to_user_ids_map );
+				foreach ( array_chunk( $all_emails, 300 ) as $emails_chunk ) {
+					$normalized_emails = array_map( 'strtolower', $emails_chunk );
+					$email_placeholders = implode( ',', array_fill( 0, count( $normalized_emails ), '%s' ) );
+					$sql_args = array_merge(
+						array( "SELECT LOWER(`{$dlm_download_email_column}`) AS email_key, COUNT(*) AS downloads_count FROM `{$dlm_download_table}` WHERE LOWER(`{$dlm_download_email_column}`) IN ({$email_placeholders}) GROUP BY LOWER(`{$dlm_download_email_column}`)" ),
+						$normalized_emails
+					);
+					$email_sql = call_user_func_array( array( $wpdb, 'prepare' ), $sql_args );
+					$email_rows = $wpdb->get_results( $email_sql, ARRAY_A );
+
+					foreach ( (array) $email_rows as $email_row ) {
+						$email_key = isset( $email_row['email_key'] ) ? strtolower( (string) $email_row['email_key'] ) : '';
+						if ( empty( $email_key ) || ! isset( $email_to_user_ids_map[ $email_key ] ) ) {
+							continue;
+						}
+
+						$email_count = isset( $email_row['downloads_count'] ) ? (int) $email_row['downloads_count'] : 0;
+						foreach ( $email_to_user_ids_map[ $email_key ] as $uid ) {
+							if ( ! empty( $dlm_download_user_id_column ) && isset( $dlm_downloads_count_cache[ $uid ] ) && $dlm_downloads_count_cache[ $uid ] > 0 ) {
+								continue;
+							}
+							if ( ! isset( $dlm_downloads_count_cache[ $uid ] ) ) {
+								$dlm_downloads_count_cache[ $uid ] = 0;
+							}
+							$dlm_downloads_count_cache[ $uid ] += $email_count;
+						}
+					}
+				}
+			}
+		}
+
+		foreach ( $all_user_ids as $uid ) {
+			if ( ! isset( $dlm_downloads_count_cache[ $uid ] ) ) {
+				$dlm_downloads_count_cache[ $uid ] = 0;
+			}
 		}
 
 		// Función auxiliar para contar cursos únicos.
@@ -406,6 +577,12 @@ class Users_Toolkit_Spam_User_Identifier {
 		$has_memberships_func = function( $uid ) use ( $count_memberships_func ) {
 			return $count_memberships_func( $uid ) > 0;
 		};
+		$count_dlm_downloads_func = function( $uid ) use ( &$dlm_downloads_count_cache ) {
+			return isset( $dlm_downloads_count_cache[ $uid ] ) ? (int) $dlm_downloads_count_cache[ $uid ] : 0;
+		};
+		$has_dlm_downloads_func = function( $uid ) use ( $count_dlm_downloads_func ) {
+			return $count_dlm_downloads_func( $uid ) > 0;
+		};
 		$has_certificates_func = function( $uid ) use ( $wpdb, &$certificates_cache ) {
 			if ( isset( $certificates_cache[ $uid ] ) ) {
 				return $certificates_cache[ $uid ];
@@ -489,6 +666,9 @@ class Users_Toolkit_Spam_User_Identifier {
 			if ( in_array( 'memberships', $criteria_positive, true ) ) {
 				$positive_matches['memberships'] = $has_memberships_func( $user_id );
 			}
+			if ( in_array( 'dlm_downloads', $criteria_positive, true ) ) {
+				$positive_matches['dlm_downloads'] = $has_dlm_downloads_func( $user_id );
+			}
 			
 			// Verificar tipos de post positivos (debe ser autor de)
 			if ( ! empty( $post_types_positive ) ) {
@@ -525,6 +705,10 @@ class Users_Toolkit_Spam_User_Identifier {
 				$memberships_count = $count_memberships_func( $user_id );
 				$negative_matches['memberships'] = ( $memberships_count === 0 ); // true = NO tiene membresías (cumple)
 			}
+			if ( in_array( 'dlm_downloads', $criteria_negative, true ) ) {
+				$dlm_downloads_count = $count_dlm_downloads_func( $user_id );
+				$negative_matches['dlm_downloads'] = ( $dlm_downloads_count === 0 ); // true = NO tiene descargas (cumple)
+			}
 			
 			// Verificar tipos de post negativos (NO debe ser autor de)
 			if ( ! empty( $post_types_negative ) ) {
@@ -555,8 +739,10 @@ class Users_Toolkit_Spam_User_Identifier {
 				$has_orders = $has_orders_func( $user_id );
 				$has_certificates = $has_certificates_func( $user_id );
 				$has_comments = $has_comments_func( $user_id );
-				$has_any_activity = $has_courses || $has_orders || $has_certificates || $has_comments;
-				// Usuarios sin actividad: no deben tener cursos, pedidos, certificados ni comentarios
+				$has_memberships = $has_memberships_func( $user_id );
+				$has_dlm_downloads = $has_dlm_downloads_func( $user_id );
+				$has_any_activity = $has_courses || $has_orders || $has_certificates || $has_comments || $has_memberships || $has_dlm_downloads;
+				// Usuarios sin actividad: no deben tener cursos, pedidos, certificados, comentarios, membresías ni descargas.
 				$matches = ! $has_any_activity;
 			} else {
 				// Hay criterios específicos seleccionados
@@ -640,6 +826,12 @@ class Users_Toolkit_Spam_User_Identifier {
 							$passes_negative_check = false;
 						}
 					}
+					if ( in_array( 'dlm_downloads', $criteria_negative, true ) ) {
+						$actual_dlm_downloads_count = $count_dlm_downloads_func( $user_id );
+						if ( $actual_dlm_downloads_count > 0 ) {
+							$passes_negative_check = false;
+						}
+					}
 				}
 				
 				// Solo agregar si pasa la verificación adicional
@@ -662,11 +854,17 @@ class Users_Toolkit_Spam_User_Identifier {
 
 				// Contar membresías WooCommerce
 				$memberships_count = $count_memberships_func( $user_id );
+				$dlm_downloads_count = $count_dlm_downloads_func( $user_id );
+				$user_profile = isset( $user_profile_map[ $user_id ] ) && is_array( $user_profile_map[ $user_id ] ) ? $user_profile_map[ $user_id ] : array();
 
 				$spam_users[] = array(
 					'ID'         => $user_id,
 					'email'      => isset( $user_row['user_email'] ) ? $user_row['user_email'] : '',
 					'login'      => isset( $user_row['user_login'] ) ? $user_row['user_login'] : '',
+					'first_name' => isset( $user_profile['first_name'] ) ? $user_profile['first_name'] : '',
+					'last_name'  => isset( $user_profile['last_name'] ) ? $user_profile['last_name'] : '',
+					'city'       => isset( $user_profile['city'] ) ? $user_profile['city'] : '',
+					'country'    => isset( $user_profile['country'] ) ? $user_profile['country'] : '',
 					'registered' => $user_registered,
 					'days_old'   => $days_old,
 					'roles'      => implode( ', ', $user_roles_array ),
@@ -674,6 +872,7 @@ class Users_Toolkit_Spam_User_Identifier {
 					'orders'     => (int) $orders_count,
 					'posts'      => (int) $posts_count,
 					'memberships' => (int) $memberships_count,
+					'dlm_downloads' => (int) $dlm_downloads_count,
 				);
 			}
 
@@ -721,22 +920,32 @@ class Users_Toolkit_Spam_User_Identifier {
 		fwrite( $fp, str_repeat( '=', 80 ) . "\n\n" );
 
 		foreach ( $spam_users as $spam_user ) {
+			$first_name = isset( $spam_user['first_name'] ) ? $spam_user['first_name'] : '';
+			$last_name = isset( $spam_user['last_name'] ) ? $spam_user['last_name'] : '';
+			$city = isset( $spam_user['city'] ) ? $spam_user['city'] : '';
+			$country = isset( $spam_user['country'] ) ? $spam_user['country'] : '';
 			$courses = isset( $spam_user['courses'] ) ? $spam_user['courses'] : 0;
 			$orders = isset( $spam_user['orders'] ) ? $spam_user['orders'] : 0;
 			$posts = isset( $spam_user['posts'] ) ? $spam_user['posts'] : 0;
 			$memberships = isset( $spam_user['memberships'] ) ? $spam_user['memberships'] : 0;
+			$dlm_downloads = isset( $spam_user['dlm_downloads'] ) ? $spam_user['dlm_downloads'] : 0;
 			fwrite( $fp, sprintf(
-				"ID: %d | Email: %s | Login: %s | Roles: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d\n",
+				"ID: %d | Nombre: %s %s | Email: %s | Login: %s | Roles: %s | Ciudad: %s | País: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d | Descargas DLM: %d\n",
 				$spam_user['ID'],
+				$first_name,
+				$last_name,
 				$spam_user['email'],
 				$spam_user['login'],
 				$spam_user['roles'],
+				$city,
+				$country,
 				$spam_user['registered'],
 				$spam_user['days_old'],
 				$courses,
 				$orders,
 				$posts,
-				$memberships
+				$memberships,
+				$dlm_downloads
 			) );
 		}
 

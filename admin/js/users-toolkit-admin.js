@@ -1424,51 +1424,70 @@
 			}
 		}
 		
-		// Búsqueda/filtrado en la tabla de usuarios spam
-		$('#users-toolkit-search-input').on('keyup', function() {
-			var searchText = $(this).val().toLowerCase();
+		function applySpamUsersFilters() {
+			var searchText = ($('#users-toolkit-search-input').val() || '').toLowerCase().trim();
+			var firstNameFilter = ($('#users-toolkit-filter-first-name').val() || '').toLowerCase().trim();
+			var lastNameFilter = ($('#users-toolkit-filter-last-name').val() || '').toLowerCase().trim();
+			var cityFilter = ($('#users-toolkit-filter-city').val() || '').toLowerCase().trim();
+			var countryFilter = ($('#users-toolkit-filter-country').val() || '').toLowerCase().trim();
 			var $table = $('#users-toolkit-spam-table');
 			var $rows = $table.find('tbody tr');
 			var $clearButton = $('#users-toolkit-clear-search');
 			
-			if (searchText === '') {
+			var hasAnyFilter = searchText !== '' || firstNameFilter !== '' || lastNameFilter !== '' || cityFilter !== '' || countryFilter !== '';
+			if (!hasAnyFilter) {
 				$rows.show();
 				$clearButton.hide();
 			} else {
 				$clearButton.show();
 				$rows.each(function() {
 					var $row = $(this);
-					var rowText = '';
-					
-					// Obtener texto de todas las celdas excepto checkbox
-					$row.find('td').each(function(index) {
-						if (index > 0) { // Saltar checkbox
-							rowText += $(this).text().toLowerCase() + ' ';
-						}
-					});
-					
-					if (rowText.indexOf(searchText) !== -1) {
-						$row.show();
-					} else {
-						$row.hide();
-					}
+					var rowText = $row.text().toLowerCase();
+					var firstName = ($row.attr('data-first_name') || '').toLowerCase();
+					var lastName = ($row.attr('data-last_name') || '').toLowerCase();
+					var city = ($row.attr('data-city') || '').toLowerCase();
+					var country = ($row.attr('data-country') || '').toLowerCase();
+
+					var matchesSearch = (searchText === '' || rowText.indexOf(searchText) !== -1);
+					var matchesFirstName = (firstNameFilter === '' || firstName.indexOf(firstNameFilter) !== -1);
+					var matchesLastName = (lastNameFilter === '' || lastName.indexOf(lastNameFilter) !== -1);
+					var matchesCity = (cityFilter === '' || city.indexOf(cityFilter) !== -1);
+					var matchesCountry = (countryFilter === '' || country.indexOf(countryFilter) !== -1);
+					var isVisible = matchesSearch && matchesFirstName && matchesLastName && matchesCity && matchesCountry;
+
+					$row.toggle(isVisible);
 				});
 			}
-			
+
 			// Actualizar contador y estado del checkbox "Seleccionar todos"
 			updateVisibleCount();
+		}
+
+		// Búsqueda/filtrado en la tabla de usuarios spam
+		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country').on('keyup change', function() {
+			applySpamUsersFilters();
 		});
 		
-		// Botón para limpiar búsqueda
+		// Botón para limpiar filtros
 		$('#users-toolkit-clear-search').on('click', function() {
-			$('#users-toolkit-search-input').val('').trigger('keyup');
+			$('#users-toolkit-search-input').val('');
+			$('#users-toolkit-filter-first-name').val('');
+			$('#users-toolkit-filter-last-name').val('');
+			$('#users-toolkit-filter-city').val('');
+			$('#users-toolkit-filter-country').val('');
+			applySpamUsersFilters();
 			$(this).hide();
 		});
 		
 		// Limpiar búsqueda con tecla Escape
-		$('#users-toolkit-search-input').on('keydown', function(e) {
+		$('#users-toolkit-search-input, #users-toolkit-filter-first-name, #users-toolkit-filter-last-name, #users-toolkit-filter-city, #users-toolkit-filter-country').on('keydown', function(e) {
 			if (e.key === 'Escape') {
-				$(this).val('').trigger('keyup');
+				$('#users-toolkit-search-input').val('');
+				$('#users-toolkit-filter-first-name').val('');
+				$('#users-toolkit-filter-last-name').val('');
+				$('#users-toolkit-filter-city').val('');
+				$('#users-toolkit-filter-country').val('');
+				applySpamUsersFilters();
 				$('#users-toolkit-clear-search').hide();
 			}
 		});
@@ -1488,7 +1507,7 @@
 			var type = $th.data('type');
 			var $table = $('#users-toolkit-spam-table');
 			var $tbody = $table.find('tbody');
-			var $rows = $tbody.find('tr').filter(':visible'); // Solo filas visibles (respetar filtro)
+			var $rows = $tbody.find('tr');
 			
 			// Determinar dirección de ordenamiento
 			if (currentSort.column === column) {
@@ -1554,8 +1573,8 @@
 			// Reordenar filas en el DOM
 			$tbody.empty().append($rows);
 			
-			// Actualizar contador de usuarios visibles y estado del checkbox "Seleccionar todos"
-			updateVisibleCount();
+			// Reaplicar filtro y contador después de ordenar
+			applySpamUsersFilters();
 		});
 		
 		// Función para exportar usuarios

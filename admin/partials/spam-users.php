@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		<div class="users-toolkit-search-criteria" style="margin: 20px 0; padding: 15px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
 			<h3 style="margin-top: 0;"><?php esc_html_e( 'Criterios de Búsqueda', 'users-toolkit' ); ?></h3>
 			<p style="font-size: 13px; color: #646970; margin-bottom: 15px;">
-				<?php esc_html_e( 'Selecciona qué actividades deben tener o NO tener los usuarios. Si no seleccionas ningún criterio, se buscarán usuarios sin ninguna actividad (sin cursos, pedidos, certificados ni comentarios).', 'users-toolkit' ); ?>
+				<?php esc_html_e( 'Selecciona qué actividades deben tener o NO tener los usuarios. Si no seleccionas ningún criterio, se buscarán usuarios sin actividad (sin cursos, pedidos, certificados, comentarios, membresías ni descargas DLM).', 'users-toolkit' ); ?>
 			</p>
 			<div style="margin-bottom: 15px; padding: 10px; background: #e5f5fa; border-left: 4px solid #2271b1; border-radius: 4px; font-size: 12px;">
 				<strong>💡 Tip:</strong> <?php esc_html_e( 'Para ver TODOS los usuarios de un rol específico (ej: todos los administradores o suscriptores), solo selecciona el rol y NO marques ningún otro criterio.', 'users-toolkit' ); ?>
@@ -69,6 +69,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 						<input type="checkbox" name="criteria_positive[]" value="memberships">
 						<?php esc_html_e( 'Membresías WooCommerce', 'users-toolkit' ); ?>
 					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_positive[]" value="dlm_downloads">
+						<?php esc_html_e( 'Descargas WP-DLM', 'users-toolkit' ); ?>
+					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post -->
 					<div id="users-toolkit-post-types-positive" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #00a32a;">
@@ -115,6 +119,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 					<label style="display: block; margin: 8px 0;">
 						<input type="checkbox" name="criteria_negative[]" value="memberships">
 						<?php esc_html_e( 'Membresías WooCommerce', 'users-toolkit' ); ?>
+					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_negative[]" value="dlm_downloads">
+						<?php esc_html_e( 'Descargas WP-DLM', 'users-toolkit' ); ?>
 					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post (negativos) -->
@@ -260,13 +268,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 					</strong>
 				</div>
 				<div style="display: flex; gap: 8px; align-items: center;">
-					<input type="text" id="users-toolkit-search-input" placeholder="<?php esc_attr_e( 'Buscar por ID, email, login, roles...', 'users-toolkit' ); ?>" style="flex: 1; padding: 8px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-search-input" placeholder="<?php esc_attr_e( 'Buscar por ID, email, login, nombre, apellido, ciudad, país, roles...', 'users-toolkit' ); ?>" style="flex: 1; padding: 8px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
 					<button type="button" id="users-toolkit-clear-search" class="button button-small" style="display: none; white-space: nowrap;">
-						<?php esc_html_e( 'Limpiar búsqueda', 'users-toolkit' ); ?>
+						<?php esc_html_e( 'Limpiar filtros', 'users-toolkit' ); ?>
 					</button>
 				</div>
+				<div style="display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 8px; margin-top: 8px;">
+					<input type="text" id="users-toolkit-filter-first-name" placeholder="<?php esc_attr_e( 'Nombre', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-filter-last-name" placeholder="<?php esc_attr_e( 'Apellido', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-filter-city" placeholder="<?php esc_attr_e( 'Ciudad', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-filter-country" placeholder="<?php esc_attr_e( 'País', 'users-toolkit' ); ?>" style="padding: 7px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+				</div>
 				<p style="margin: 8px 0 0 0; font-size: 12px; color: #646970;">
-					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. Puedes buscar por ID, email, login o roles. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
+					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. También puedes usar filtros rápidos por nombre, apellido, ciudad y país. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
 				</p>
 			</div>
 			
@@ -286,6 +300,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 						</th>
 						<th class="sortable" data-column="login" data-type="text">
 							<?php esc_html_e( 'Login', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="first_name" data-type="text">
+							<?php esc_html_e( 'Nombre', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="last_name" data-type="text">
+							<?php esc_html_e( 'Apellido', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="city" data-type="text">
+							<?php esc_html_e( 'Ciudad', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="country" data-type="text">
+							<?php esc_html_e( 'País', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
 						</th>
 						<th class="sortable" data-column="roles" data-type="text">
@@ -308,6 +338,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<?php esc_html_e( 'Membresías', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
 						</th>
+						<th class="sortable" data-column="dlm_downloads" data-type="number">
+							<?php esc_html_e( 'Descargas DLM', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
 						<th class="sortable" data-column="registered" data-type="date">
 							<?php esc_html_e( 'Registrado', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
@@ -323,6 +357,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 						$user_id = isset( $user['ID'] ) ? (int) $user['ID'] : 0;
 						$courses_count = isset( $user['courses'] ) ? (int) $user['courses'] : 0;
 						$orders_count = isset( $user['orders'] ) ? (int) $user['orders'] : 0;
+						$first_name = isset( $user['first_name'] ) ? (string) $user['first_name'] : '';
+						$last_name = isset( $user['last_name'] ) ? (string) $user['last_name'] : '';
+						$city = isset( $user['city'] ) ? (string) $user['city'] : '';
+						$country = isset( $user['country'] ) ? (string) $user['country'] : '';
+						$dlm_downloads_count = isset( $user['dlm_downloads'] ) ? (int) $user['dlm_downloads'] : 0;
 						$user_edit_url = admin_url( 'user-edit.php?user_id=' . $user_id );
 						
 						// URL para pedidos de WooCommerce (compatible con HPOS y legacy)
@@ -347,11 +386,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 					<tr data-id="<?php echo esc_attr( $user_id ); ?>" 
 						data-email="<?php echo esc_attr( strtolower( $user['email'] ) ); ?>" 
 						data-login="<?php echo esc_attr( strtolower( $user['login'] ) ); ?>" 
+						data-first_name="<?php echo esc_attr( strtolower( $first_name ) ); ?>" 
+						data-last_name="<?php echo esc_attr( strtolower( $last_name ) ); ?>" 
+						data-city="<?php echo esc_attr( strtolower( $city ) ); ?>" 
+						data-country="<?php echo esc_attr( strtolower( $country ) ); ?>" 
 						data-roles="<?php echo esc_attr( strtolower( isset( $user['roles'] ) ? $user['roles'] : '' ) ); ?>" 
 						data-courses="<?php echo esc_attr( $courses_count ); ?>" 
 						data-orders="<?php echo esc_attr( $orders_count ); ?>" 
 						data-posts="<?php echo esc_attr( isset( $user['posts'] ) ? (int) $user['posts'] : 0 ); ?>" 
 						data-memberships="<?php echo esc_attr( $memberships_count ); ?>" 
+						data-dlm_downloads="<?php echo esc_attr( $dlm_downloads_count ); ?>" 
 						data-registered="<?php echo esc_attr( strtotime( $user['registered'] ) ); ?>" 
 						data-days="<?php echo esc_attr( $user['days_old'] ); ?>">
 						<th scope="row" class="check-column">
@@ -364,6 +408,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 						</td>
 						<td><?php echo esc_html( $user['email'] ); ?></td>
 						<td><?php echo esc_html( $user['login'] ); ?></td>
+						<td><?php echo esc_html( $first_name ); ?></td>
+						<td><?php echo esc_html( $last_name ); ?></td>
+						<td><?php echo esc_html( $city ); ?></td>
+						<td><?php echo esc_html( $country ); ?></td>
 						<td><?php echo esc_html( isset( $user['roles'] ) ? $user['roles'] : '' ); ?></td>
 						<td><?php echo esc_html( $courses_count ); ?></td>
 						<td>
@@ -399,6 +447,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 								<span style="color: #646970;"><?php echo esc_html( $memberships_count ); ?></span>
 							<?php endif; ?>
 						</td>
+						<td><?php echo esc_html( $dlm_downloads_count ); ?></td>
 						<td><?php echo esc_html( $user['registered'] ); ?></td>
 						<td><?php echo esc_html( $user['days_old'] ); ?></td>
 					</tr>

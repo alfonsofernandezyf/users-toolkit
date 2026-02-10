@@ -2,6 +2,10 @@
 
 Plugin de WordPress para identificar usuarios potencialmente spam, ejecutar acciones masivas de usuarios y mantener la base de datos optimizada con respaldo previo.
 
+**Versión:** `1.1.0`  
+**Autor:** Alfonso Fernández  
+**Email:** alfonso@cientifi.ca
+
 ## Resumen
 
 `Users Toolkit` agrega un menú de administración con 4 módulos:
@@ -21,6 +25,7 @@ Plugin de WordPress para identificar usuarios potencialmente spam, ejecutar acci
   - Pedidos WooCommerce
   - Membresías WooCommerce
   - Comentarios
+  - Descargas WP-DLM
   - Autoría de contenido (incluye tipos de post dinámicos)
 - Modo de coincidencia:
   - Coincidir con todos los criterios
