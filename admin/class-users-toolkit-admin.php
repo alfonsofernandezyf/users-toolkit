@@ -359,6 +359,7 @@ class Users_Toolkit_Admin {
 			return true;
 		}
 		set_transient( $lock_key, 1, 1800 );
+		$this->register_worker_shutdown_handler( $operation_id, $lock_key, $token_key, $payload_key, 'identify' );
 
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 1800 );
@@ -457,6 +458,62 @@ class Users_Toolkit_Admin {
 	}
 
 	/**
+	 * Register a shutdown guard to capture fatal errors in workers and avoid stuck locks.
+	 *
+	 * @param string      $operation_id Operation identifier.
+	 * @param string      $lock_key     Lock transient key.
+	 * @param string      $token_key    Token transient key.
+	 * @param string|null $payload_key  Optional payload transient key.
+	 * @param string      $worker_type  Worker label for messages.
+	 */
+	private function register_worker_shutdown_handler( $operation_id, $lock_key, $token_key, $payload_key = null, $worker_type = 'worker' ) {
+		$reserved_memory = str_repeat( 'x', 32768 );
+		register_shutdown_function(
+			function() use ( $operation_id, $lock_key, $token_key, $payload_key, $worker_type, &$reserved_memory ) {
+				$reserved_memory = null;
+				$error = error_get_last();
+				if ( ! is_array( $error ) || ! isset( $error['type'] ) ) {
+					return;
+				}
+
+				$fatal_types = array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR );
+				if ( ! in_array( (int) $error['type'], $fatal_types, true ) ) {
+					return;
+				}
+
+				if ( ! get_transient( $lock_key ) ) {
+					return;
+				}
+
+				$type_label = ( 'identify' === $worker_type ) ? __( 'búsqueda', 'users-toolkit' ) : __( 'backup', 'users-toolkit' );
+				$line = isset( $error['line'] ) ? (int) $error['line'] : 0;
+				$file = isset( $error['file'] ) ? basename( (string) $error['file'] ) : 'unknown';
+				$message = isset( $error['message'] ) ? wp_strip_all_tags( (string) $error['message'] ) : __( 'Error fatal desconocido', 'users-toolkit' );
+
+				Users_Toolkit_Progress_Tracker::set_progress(
+					$operation_id,
+					100,
+					sprintf( __( 'Error fatal durante %1$s: %2$s (%3$s:%4$d)', 'users-toolkit' ), $type_label, $message, $file, $line ),
+					true,
+					array(
+						'error'   => true,
+						'fatal'   => true,
+						'message' => $message,
+						'file'    => $file,
+						'line'    => $line,
+					)
+				);
+
+				delete_transient( $lock_key );
+				delete_transient( $token_key );
+				if ( ! empty( $payload_key ) ) {
+					delete_transient( $payload_key );
+				}
+			}
+		);
+	}
+
+	/**
 	 * AJAX handler for identifying spam users
 	 */
 	public function ajax_identify_spam() {
@@ -492,8 +549,9 @@ class Users_Toolkit_Admin {
 		set_transient( $this->get_identify_worker_payload_key( $operation_id ), $payload, 7200 );
 		Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 1, __( 'Iniciando búsqueda de usuarios...', 'users-toolkit' ), false );
 
-		$scheduled  = $this->schedule_identify_worker_event( $operation_id, $worker_token, 10 );
-		$dispatched = $this->dispatch_identify_worker_request( $operation_id, $worker_token );
+			$scheduled  = $this->schedule_identify_worker_event( $operation_id, $worker_token, 10 );
+			$dispatched = $this->dispatch_identify_worker_request( $operation_id, $worker_token );
+			delete_transient( 'users_toolkit_identify_retry_count_' . $operation_id );
 
 		if ( ! $scheduled && ! $dispatched ) {
 			delete_transient( $this->get_identify_worker_token_key( $operation_id ) );
@@ -1118,6 +1176,7 @@ class Users_Toolkit_Admin {
 			return true;
 		}
 		set_transient( $lock_key, 1, 1800 );
+		$this->register_worker_shutdown_handler( $operation_id, $lock_key, $token_key, null, 'backup' );
 
 		Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 5, __( 'Procesando backup en segundo plano...', 'users-toolkit' ), false );
 
@@ -1182,6 +1241,7 @@ class Users_Toolkit_Admin {
 		// Programar fallback por cron y lanzar loopback para ejecución inmediata.
 		$scheduled  = $this->schedule_backup_worker_event( $operation_id, $worker_token, 10 );
 		$dispatched = $this->dispatch_backup_worker_request( $operation_id, $worker_token );
+		delete_transient( 'users_toolkit_backup_retry_count_' . $operation_id );
 
 		if ( ! $scheduled && ! $dispatched ) {
 			delete_transient( $this->get_backup_worker_token_key( $operation_id ) );
@@ -1325,6 +1385,7 @@ class Users_Toolkit_Admin {
 		$last_update = isset( $progress['timestamp'] ) ? (int) $progress['timestamp'] : 0;
 		$age = $last_update > 0 ? ( $now - $last_update ) : 0;
 		$retry_key = 'users_toolkit_identify_retry_' . $operation_id;
+		$retry_count_key = 'users_toolkit_identify_retry_count_' . $operation_id;
 		$last_retry = (int) get_transient( $retry_key );
 
 		// No reintentar demasiado pronto.
@@ -1343,6 +1404,23 @@ class Users_Toolkit_Admin {
 		}
 
 		set_transient( $retry_key, $now, 900 );
+		$retry_count = (int) get_transient( $retry_count_key );
+		$retry_count++;
+		set_transient( $retry_count_key, $retry_count, 7200 );
+
+		if ( $retry_count > 20 ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'La búsqueda falló repetidamente al iniciar en segundo plano. Revisa errores fatales de plugins y WP-Cron.', 'users-toolkit' ),
+				true,
+				array( 'error' => true, 'retry_count' => $retry_count )
+			);
+			delete_transient( $this->get_identify_worker_lock_key( $operation_id ) );
+			delete_transient( $this->get_identify_worker_token_key( $operation_id ) );
+			delete_transient( $this->get_identify_worker_payload_key( $operation_id ) );
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
 
 		$dispatched = false;
 		$scheduled = false;
@@ -1414,6 +1492,7 @@ class Users_Toolkit_Admin {
 		$last_update = isset( $progress['timestamp'] ) ? (int) $progress['timestamp'] : 0;
 		$age = $last_update > 0 ? ( $now - $last_update ) : 0;
 		$retry_key = 'users_toolkit_backup_retry_' . $operation_id;
+		$retry_count_key = 'users_toolkit_backup_retry_count_' . $operation_id;
 		$last_retry = (int) get_transient( $retry_key );
 
 		if ( $last_retry > 0 && ( $now - $last_retry ) < 45 ) {
@@ -1431,6 +1510,22 @@ class Users_Toolkit_Admin {
 		}
 
 		set_transient( $retry_key, $now, 900 );
+		$retry_count = (int) get_transient( $retry_count_key );
+		$retry_count++;
+		set_transient( $retry_count_key, $retry_count, 7200 );
+
+		if ( $retry_count > 20 ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'El backup falló repetidamente al iniciar en segundo plano. Revisa errores fatales de plugins y WP-Cron.', 'users-toolkit' ),
+				true,
+				array( 'error' => true, 'retry_count' => $retry_count )
+			);
+			delete_transient( $this->get_backup_worker_lock_key( $operation_id ) );
+			delete_transient( $this->get_backup_worker_token_key( $operation_id ) );
+			return Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
+		}
 
 		$dispatched = false;
 		$scheduled = false;
