@@ -37,14 +37,15 @@
 		// Identify spam users
 		$('#users-toolkit-identify-spam').on('click', function() {
 			var $button = $(this);
-			var $results = $('#users-toolkit-identify-results');
-			var $content = $('#users-toolkit-identify-content');
-			var $progressContainer = $('#users-toolkit-progress-container');
-			var $progressBar = $('#users-toolkit-progress-bar');
-			var $progressMsg = $('#users-toolkit-progress-message');
-			var $progressLog = $('#users-toolkit-progress-log');
-			var operationId = null;
-			var pollInterval = null;
+				var $results = $('#users-toolkit-identify-results');
+				var $content = $('#users-toolkit-identify-content');
+				var $progressContainer = $('#users-toolkit-progress-container');
+				var $progressBar = $('#users-toolkit-progress-bar');
+				var $progressMsg = $('#users-toolkit-progress-message');
+				var $progressLog = $('#users-toolkit-progress-log');
+				var operationId = null;
+				var pollInterval = null;
+				var pollErrors = 0;
 
 			$button.prop('disabled', true).html('<span class="users-toolkit-loading"></span> ' + usersToolkit.strings.identifying);
 			$results.hide();
@@ -64,16 +65,23 @@
 							nonce: usersToolkit.nonce,
 							operation_id: operation_id
 						},
-						success: function(response) {
-							if (response.success && response.data) {
-								updateProgress($progressBar, $progressMsg, $progressLog, response.data.current, response.data.message);
-								if (response.data.completed) {
-									clearInterval(pollInterval);
-									$progressContainer.hide();
-									
-									// Verificar si hay resultados - mejor manejo de la estructura de datos
-									var count = 0;
-									var loadFile = null;
+							success: function(response) {
+								if (response.success && response.data) {
+									pollErrors = 0;
+									updateProgress($progressBar, $progressMsg, $progressLog, response.data.current, response.data.message);
+									if (response.data.completed) {
+										clearInterval(pollInterval);
+										$progressContainer.hide();
+
+										if (response.data.data && response.data.data.error) {
+											showError($content, response.data.message || usersToolkit.strings.error);
+											$results.removeClass('success warning info').addClass('error').show();
+											return;
+										}
+										
+										// Verificar si hay resultados - mejor manejo de la estructura de datos
+										var count = 0;
+										var loadFile = null;
 									
 									// Intentar obtener count y file_json de diferentes ubicaciones posibles
 									if (response.data.data) {
@@ -120,24 +128,34 @@
 										html += '<p style="font-size: 13px; color: #646970;">Revisa la carpeta wp-content/uploads/users-toolkit/ para encontrar el archivo JSON generado.</p>';
 										html += '</div>';
 										
-										$content.html(html);
-										$results.removeClass('error warning').addClass('success').show();
+											$content.html(html);
+											$results.removeClass('error warning').addClass('success').show();
+										}
 									}
+								} else if (response.success === false) {
+									pollErrors++;
+									if (pollErrors < 15) {
+										return;
+									}
+									clearInterval(pollInterval);
+									$progressContainer.hide();
+									showError($content, response.data && response.data.message ? response.data.message : usersToolkit.strings.error);
+									$results.removeClass('success warning info').addClass('error').show();
 								}
-							} else if (response.success === false) {
-								// Error en la respuesta
+							},
+							error: function() {
+								pollErrors++;
+								if (pollErrors < 15) {
+									return;
+								}
 								clearInterval(pollInterval);
 								$progressContainer.hide();
-								showError($content, response.data && response.data.message ? response.data.message : usersToolkit.strings.error);
+								showError($content, 'No se pudo consultar el progreso de la búsqueda. Revisa conectividad del servidor y logs PHP.');
 								$results.removeClass('success warning info').addClass('error').show();
 							}
-						},
-						error: function() {
-							// Silenciar errores de polling
-						}
-					});
-				}, 2000);
-			}
+						});
+					}, 2000);
+				}
 
 			// Obtener criterios seleccionados
 			var criteriaPositive = [];
@@ -180,31 +198,38 @@
 				}
 			});
 			
-			var matchAll = $('#users-toolkit-match-all').prop('checked') ? '1' : '0';
+				var matchAll = $('#users-toolkit-match-all').prop('checked') ? '1' : '0';
 
-			$.ajax({
-				url: usersToolkit.ajaxurl,
-				type: 'POST',
-				timeout: 600000, // 10 minutos
-				data: {
-					action: 'users_toolkit_identify_spam',
-					nonce: usersToolkit.nonce,
-					criteria_positive: criteriaPositive,
-					criteria_negative: criteriaNegative,
-					post_types_positive: postTypesPositive,
-					post_types_negative: postTypesNegative,
-					user_roles: userRoles,
-					match_all: matchAll
-				},
-				success: function(response) {
-					if (response.success) {
-						if (response.data.operation_id) {
-							startPolling(response.data.operation_id);
-							updateProgress($progressBar, $progressMsg, $progressLog, 5, 'Operación iniciada. Verificando progreso...');
-						} else {
-							// Operación completada inmediatamente
-							clearInterval(pollInterval);
-							$progressContainer.hide();
+				operationId = 'spam_identify_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+				startPolling(operationId);
+
+				$.ajax({
+					url: usersToolkit.ajaxurl,
+					type: 'POST',
+					timeout: 600000, // 10 minutos
+					data: {
+						action: 'users_toolkit_identify_spam',
+						nonce: usersToolkit.nonce,
+						operation_id: operationId,
+						criteria_positive: criteriaPositive,
+						criteria_negative: criteriaNegative,
+						post_types_positive: postTypesPositive,
+						post_types_negative: postTypesNegative,
+						user_roles: userRoles,
+						match_all: matchAll
+					},
+					success: function(response) {
+						if (response.success) {
+							if (response.data.operation_id) {
+								if (response.data.operation_id !== operationId) {
+									clearInterval(pollInterval);
+									startPolling(response.data.operation_id);
+								}
+								updateProgress($progressBar, $progressMsg, $progressLog, 3, response.data.message || 'Operación iniciada. Verificando progreso...');
+							} else {
+								// Operación completada inmediatamente
+								clearInterval(pollInterval);
+								$progressContainer.hide();
 							
 							// Obtener count y file_json con mejor manejo
 							var count = response.data.count !== undefined ? response.data.count : 0;
@@ -243,74 +268,34 @@
 								$content.html(html);
 								$results.removeClass('error warning').addClass('success').show();
 							}
-						}
-					} else {
-						clearInterval(pollInterval);
-						$progressContainer.hide();
-						showError($content, response.data.message || usersToolkit.strings.error);
-						$results.removeClass('success warning').addClass('error').show();
-					}
-				},
-				error: function(xhr, status, err) {
-					clearInterval(pollInterval);
-					
-					// Si el polling sigue activo, no ocultar el contenedor de progreso todavía
-					// Puede ser un error temporal
-					console.error('Users Toolkit: Error en búsqueda de usuarios:', status, err);
-					
-					// Intentar verificar si hay un archivo generado a pesar del error
-					// Esto puede pasar si la operación se completa pero hay timeout en la respuesta
-					var msg = usersToolkit.strings.error + ' ';
-					var hasFile = false;
-					
-					// Intentar parsear la respuesta si existe
-					if (xhr.responseText) {
-						try {
-							var response = JSON.parse(xhr.responseText);
-							if (response && response.data) {
-								var loadFile = response.data.file_json || (response.data.file ? response.data.file.replace(/\.txt$/, '') + '.json' : null);
-								if (loadFile) {
-									hasFile = true;
-									$progressContainer.hide();
-									var html = '<div class="users-toolkit-message warning">';
-									html += '<p><strong>Advertencia:</strong> Hubo un problema de comunicación, pero se detectó un archivo generado.</p>';
-									html += '<p><a href="?page=users-toolkit-spam&load_file=' + encodeURIComponent(loadFile) + '" class="button button-primary">Ver lista generada</a></p>';
-									html += '</div>';
-									$content.html(html);
-									$results.removeClass('error success').addClass('warning').show();
-									return;
-								}
 							}
-						} catch (e) {
-							// No se pudo parsear, continuar con mensaje de error normal
-						}
-					}
-					
-					// Si es timeout, mantener el progreso visible y mostrar mensaje
-					if (status === 'timeout') {
-						updateProgress($progressBar, $progressMsg, $progressLog, 95, 'La operación está tardando más de lo esperado. Verificando si se generó el archivo...');
-						
-						// Intentar verificar archivos recientes después de un delay
-						setTimeout(function() {
-							// Verificar si hay un archivo JSON reciente
-							var html = '<div class="users-toolkit-message warning">';
-							html += '<p><strong>⏱️ La operación tardó demasiado (más de 10 minutos).</strong></p>';
-							html += '<p>Es posible que la lista se haya generado correctamente a pesar del timeout.</p>';
-							html += '<p><strong>Por favor, revisa la carpeta:</strong> <code>wp-content/uploads/users-toolkit/</code></p>';
-							html += '<p>Busca archivos que empiecen con <code>spam-users-</code> y ordenados por fecha más reciente.</p>';
-							html += '<p style="margin-top: 15px;"><strong>💡 Sugerencia:</strong> Si encuentras el archivo, puedes cargarlo manualmente usando el parámetro <code>load_file</code> en la URL.</p>';
-							html += '</div>';
-							$content.html(html);
+						} else {
+							clearInterval(pollInterval);
 							$progressContainer.hide();
+							showError($content, response.data.message || usersToolkit.strings.error);
+							$results.removeClass('success warning').addClass('error').show();
+						}
+					},
+					error: function(xhr, status) {
+						if (status === 'timeout') {
+							updateProgress($progressBar, $progressMsg, $progressLog, 3, 'La solicitud inicial tardó demasiado, pero la búsqueda puede seguir en segundo plano. Monitoreando progreso...');
+							var timeoutHtml = '<div class="users-toolkit-message warning">';
+							timeoutHtml += '<p>La conexión inicial excedió el tiempo límite.</p>';
+							timeoutHtml += '<p>La búsqueda puede seguir ejecutándose en segundo plano; mantén esta pantalla abierta para ver el progreso.</p>';
+							timeoutHtml += '</div>';
+							$content.html(timeoutHtml);
 							$results.removeClass('error success').addClass('warning').show();
-						}, 2000);
-					} else {
-						$progressContainer.hide();
-						msg += 'Error de comunicación. Si hay muchos usuarios, la operación puede haber excedido el tiempo. Revisa wp-content/uploads/users-toolkit/ por archivos spam-users-*.json recientes.';
-						showError($content, msg);
-						$results.removeClass('success warning').addClass('error').show();
-					}
-				},
+							return;
+						}
+
+						updateProgress($progressBar, $progressMsg, $progressLog, 3, 'Hubo un error de comunicación al iniciar, intentando recuperar progreso...');
+						var warnHtml = '<div class="users-toolkit-message warning">';
+						warnHtml += '<p>Error de comunicación al iniciar la búsqueda.</p>';
+						warnHtml += '<p>Se seguirá consultando el progreso por unos instantes.</p>';
+						warnHtml += '</div>';
+						$content.html(warnHtml);
+						$results.removeClass('error success').addClass('warning').show();
+					},
 				complete: function() {
 					// No deshabilitar botón hasta que termine la operación
 					setTimeout(function() {

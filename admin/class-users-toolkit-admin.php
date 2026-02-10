@@ -226,6 +226,237 @@ class Users_Toolkit_Admin {
 	}
 
 	/**
+	 * Build identify operation ID.
+	 *
+	 * @return string
+	 */
+	private function build_identify_operation_id() {
+		return 'spam_identify_' . time() . '_' . wp_generate_password( 8, false );
+	}
+
+	/**
+	 * Validate identify operation ID format.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @return bool
+	 */
+	private function is_valid_identify_operation_id( $operation_id ) {
+		return ! empty( $operation_id ) && strpos( $operation_id, 'spam_identify_' ) === 0;
+	}
+
+	/**
+	 * Build transient key for identify worker token.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @return string
+	 */
+	private function get_identify_worker_token_key( $operation_id ) {
+		return 'users_toolkit_identify_worker_' . $operation_id;
+	}
+
+	/**
+	 * Build transient key for identify worker payload.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @return string
+	 */
+	private function get_identify_worker_payload_key( $operation_id ) {
+		return 'users_toolkit_identify_payload_' . $operation_id;
+	}
+
+	/**
+	 * Build transient key for identify worker lock.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @return string
+	 */
+	private function get_identify_worker_lock_key( $operation_id ) {
+		return 'users_toolkit_identify_lock_' . $operation_id;
+	}
+
+	/**
+	 * Trigger async identify worker via loopback request.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @param string $worker_token One-time worker token.
+	 * @return bool
+	 */
+	private function dispatch_identify_worker_request( $operation_id, $worker_token ) {
+		$url = admin_url( 'admin-ajax.php' );
+		$response = wp_remote_post(
+			$url,
+			array(
+				'timeout'   => 1,
+				'blocking'  => false,
+				'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+				'body'      => array(
+					'action'       => 'users_toolkit_process_identify',
+					'operation_id' => $operation_id,
+					'worker_token' => $worker_token,
+				),
+			)
+		);
+
+		return ! is_wp_error( $response );
+	}
+
+	/**
+	 * Schedule async identify worker using WP-Cron as fallback.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @param string $worker_token One-time worker token.
+	 * @param int    $delay        Delay in seconds.
+	 * @return bool
+	 */
+	private function schedule_identify_worker_event( $operation_id, $worker_token, $delay = 10 ) {
+		$delay = max( 1, (int) $delay );
+		$args  = array( $operation_id, $worker_token );
+
+		if ( wp_next_scheduled( 'users_toolkit_process_identify_event', $args ) ) {
+			return true;
+		}
+
+		return (bool) wp_schedule_single_event( time() + $delay, 'users_toolkit_process_identify_event', $args );
+	}
+
+	/**
+	 * Run identify process for worker endpoints.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @param string $worker_token One-time worker token.
+	 * @return true|WP_Error
+	 */
+	private function process_identify_operation( $operation_id, $worker_token ) {
+		$operation_id = sanitize_key( (string) $operation_id );
+		$worker_token = sanitize_text_field( (string) $worker_token );
+
+		if ( ! $this->is_valid_identify_operation_id( $operation_id ) || empty( $worker_token ) ) {
+			return new WP_Error( 'invalid_request', __( 'Solicitud de identificación inválida', 'users-toolkit' ) );
+		}
+
+		$token_key    = $this->get_identify_worker_token_key( $operation_id );
+		$stored_token = get_transient( $token_key );
+		if ( ! is_string( $stored_token ) || ! hash_equals( $stored_token, $worker_token ) ) {
+			return new WP_Error( 'invalid_token', __( 'Token de identificación inválido o expirado', 'users-toolkit' ) );
+		}
+
+		$payload_key = $this->get_identify_worker_payload_key( $operation_id );
+		$payload     = get_transient( $payload_key );
+		if ( ! is_array( $payload ) ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se encontró la configuración de búsqueda. Reintenta la operación.', 'users-toolkit' ),
+				true,
+				array( 'error' => true )
+			);
+			delete_transient( $token_key );
+			return new WP_Error( 'missing_payload', __( 'Configuración de búsqueda no encontrada', 'users-toolkit' ) );
+		}
+
+		$lock_key = $this->get_identify_worker_lock_key( $operation_id );
+		if ( get_transient( $lock_key ) ) {
+			return true;
+		}
+		set_transient( $lock_key, 1, 1800 );
+
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 1800 );
+		}
+		if ( function_exists( 'ini_set' ) ) {
+			@ini_set( 'max_execution_time', '1800' );
+			@ini_set( 'memory_limit', '512M' );
+		}
+
+		Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 5, __( 'Procesando búsqueda de usuarios en segundo plano...', 'users-toolkit' ), false );
+
+		try {
+			$spam_users = Users_Toolkit_Spam_User_Identifier::identify_spam_users(
+				$operation_id,
+				isset( $payload['criteria_positive'] ) && is_array( $payload['criteria_positive'] ) ? $payload['criteria_positive'] : array(),
+				isset( $payload['criteria_negative'] ) && is_array( $payload['criteria_negative'] ) ? $payload['criteria_negative'] : array(),
+				! empty( $payload['match_all'] ),
+				isset( $payload['post_types_positive'] ) && is_array( $payload['post_types_positive'] ) ? $payload['post_types_positive'] : array(),
+				isset( $payload['post_types_negative'] ) && is_array( $payload['post_types_negative'] ) ? $payload['post_types_negative'] : array(),
+				isset( $payload['user_roles'] ) && is_array( $payload['user_roles'] ) ? $payload['user_roles'] : array()
+			);
+		} catch ( Exception $e ) {
+			$spam_users = new WP_Error( 'identify_exception', $e->getMessage() );
+		} catch ( Error $e ) {
+			$spam_users = new WP_Error( 'identify_error', $e->getMessage() );
+		}
+
+		if ( is_wp_error( $spam_users ) ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'Error durante la búsqueda:', 'users-toolkit' ) . ' ' . $spam_users->get_error_message(),
+				true,
+				array(
+					'error'   => true,
+					'message' => $spam_users->get_error_message(),
+				)
+			);
+			delete_transient( $lock_key );
+			delete_transient( $token_key );
+			delete_transient( $payload_key );
+			return $spam_users;
+		}
+
+		if ( empty( $spam_users ) ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se encontraron usuarios que coincidan con los criterios seleccionados.', 'users-toolkit' ),
+				true,
+				array(
+					'count'     => 0,
+					'file'      => '',
+					'file_json' => '',
+				)
+			);
+			delete_transient( $lock_key );
+			delete_transient( $token_key );
+			delete_transient( $payload_key );
+			return true;
+		}
+
+		$file_path = Users_Toolkit_Spam_User_Identifier::save_spam_users_list( $spam_users );
+		if ( false === $file_path ) {
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se pudo guardar el archivo de resultados.', 'users-toolkit' ),
+				true,
+				array( 'error' => true )
+			);
+			delete_transient( $lock_key );
+			delete_transient( $token_key );
+			delete_transient( $payload_key );
+			return new WP_Error( 'save_failed', __( 'No se pudo guardar el archivo de resultados.', 'users-toolkit' ) );
+		}
+
+		$file_json = pathinfo( $file_path, PATHINFO_FILENAME ) . '.json';
+		Users_Toolkit_Progress_Tracker::set_progress(
+			$operation_id,
+			100,
+			sprintf( __( 'Completado: %d usuarios spam encontrados', 'users-toolkit' ), count( $spam_users ) ),
+			true,
+			array(
+				'count'     => count( $spam_users ),
+				'file'      => basename( $file_path ),
+				'file_json' => $file_json,
+			)
+		);
+
+		delete_transient( $lock_key );
+		delete_transient( $token_key );
+		delete_transient( $payload_key );
+
+		return true;
+	}
+
+	/**
 	 * AJAX handler for identifying spam users
 	 */
 	public function ajax_identify_spam() {
@@ -235,70 +466,90 @@ class Users_Toolkit_Admin {
 			wp_send_json_error( array( 'message' => __( 'Permisos insuficientes', 'users-toolkit' ) ) );
 		}
 
-		// Aumentar tiempo para bases con muchos usuarios (10 minutos)
-		set_time_limit( 600 );
-		ini_set( 'max_execution_time', 600 );
+		$criteria_positive   = isset( $_POST['criteria_positive'] ) && is_array( $_POST['criteria_positive'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['criteria_positive'] ) ) : array();
+		$criteria_negative   = isset( $_POST['criteria_negative'] ) && is_array( $_POST['criteria_negative'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['criteria_negative'] ) ) : array();
+		$post_types_positive = isset( $_POST['post_types_positive'] ) && is_array( $_POST['post_types_positive'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['post_types_positive'] ) ) : array();
+		$post_types_negative = isset( $_POST['post_types_negative'] ) && is_array( $_POST['post_types_negative'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['post_types_negative'] ) ) : array();
+		$user_roles          = isset( $_POST['user_roles'] ) && is_array( $_POST['user_roles'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['user_roles'] ) ) : array();
+		$match_all           = isset( $_POST['match_all'] ) && wp_unslash( $_POST['match_all'] ) === '1';
 
-		// Obtener criterios del POST
-		$criteria_positive = isset( $_POST['criteria_positive'] ) && is_array( $_POST['criteria_positive'] ) ? array_map( 'sanitize_text_field', $_POST['criteria_positive'] ) : array();
-		$criteria_negative = isset( $_POST['criteria_negative'] ) && is_array( $_POST['criteria_negative'] ) ? array_map( 'sanitize_text_field', $_POST['criteria_negative'] ) : array();
-		$post_types_positive = isset( $_POST['post_types_positive'] ) && is_array( $_POST['post_types_positive'] ) ? array_map( 'sanitize_text_field', $_POST['post_types_positive'] ) : array();
-		$post_types_negative = isset( $_POST['post_types_negative'] ) && is_array( $_POST['post_types_negative'] ) ? array_map( 'sanitize_text_field', $_POST['post_types_negative'] ) : array();
-		$user_roles = isset( $_POST['user_roles'] ) && is_array( $_POST['user_roles'] ) ? array_map( 'sanitize_text_field', $_POST['user_roles'] ) : array();
-		$match_all = isset( $_POST['match_all'] ) && $_POST['match_all'] === '1';
-
-		// Crear operation_id para seguimiento de progreso
-		$operation_id = 'spam_identify_' . time() . '_' . wp_generate_password( 8, false );
-
-		try {
-			$spam_users = Users_Toolkit_Spam_User_Identifier::identify_spam_users( $operation_id, $criteria_positive, $criteria_negative, $match_all, $post_types_positive, $post_types_negative, $user_roles );
-			
-			// Marcar progreso como completado
-			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 100, sprintf( __( 'Análisis completado: %d usuarios encontrados', 'users-toolkit' ), count( $spam_users ) ), true, array( 'count' => count( $spam_users ) ) );
-			
-			// Si no hay resultados, no guardar archivo y mostrar mensaje
-			if ( empty( $spam_users ) ) {
-				wp_send_json_success(
-					array(
-						'operation_id' => $operation_id,
-						'count'        => 0,
-						'users'        => array(),
-						'file'         => '',
-						'file_json'    => '',
-						'message'      => __( 'No se encontraron usuarios que coincidan con los criterios seleccionados.', 'users-toolkit' ),
-					)
-				);
-			}
-			
-			$file_path = Users_Toolkit_Spam_User_Identifier::save_spam_users_list( $spam_users );
-
-			if ( $file_path === false ) {
-				Users_Toolkit_Progress_Tracker::delete_progress( $operation_id );
-				wp_send_json_error( array( 'message' => __( 'No se pudo guardar el archivo de resultados.', 'users-toolkit' ) ) );
-			}
-
-			// Nombre del .json para cargar la tabla en la página (load_file)
-			$file_json = pathinfo( $file_path, PATHINFO_FILENAME ) . '.json';
-
-			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 100, sprintf( __( 'Completado: %d usuarios spam encontrados', 'users-toolkit' ), count( $spam_users ) ), true, array( 'count' => count( $spam_users ), 'file' => basename( $file_path ), 'file_json' => $file_json ) );
-
-			wp_send_json_success(
-				array(
-					'operation_id' => $operation_id,
-					'count'        => count( $spam_users ),
-					'users'        => array_slice( $spam_users, 0, 50 ),
-					'file'         => basename( $file_path ),
-					'file_json'    => $file_json,
-					'message'      => sprintf( __( 'Se encontraron %d usuarios spam', 'users-toolkit' ), count( $spam_users ) ),
-				)
-			);
-		} catch ( Exception $e ) {
-			Users_Toolkit_Progress_Tracker::delete_progress( $operation_id );
-			wp_send_json_error( array( 'message' => __( 'Error:', 'users-toolkit' ) . ' ' . $e->getMessage() ) );
-		} catch ( Error $e ) {
-			Users_Toolkit_Progress_Tracker::delete_progress( $operation_id );
-			wp_send_json_error( array( 'message' => __( 'Error:', 'users-toolkit' ) . ' ' . $e->getMessage() ) );
+		$operation_id = isset( $_POST['operation_id'] ) ? sanitize_key( wp_unslash( $_POST['operation_id'] ) ) : '';
+		if ( ! $this->is_valid_identify_operation_id( $operation_id ) ) {
+			$operation_id = $this->build_identify_operation_id();
 		}
+
+		$worker_token = wp_generate_password( 32, false, false );
+		$payload = array(
+			'criteria_positive'   => array_values( array_unique( $criteria_positive ) ),
+			'criteria_negative'   => array_values( array_unique( $criteria_negative ) ),
+			'post_types_positive' => array_values( array_unique( $post_types_positive ) ),
+			'post_types_negative' => array_values( array_unique( $post_types_negative ) ),
+			'user_roles'          => array_values( array_unique( $user_roles ) ),
+			'match_all'           => (bool) $match_all,
+		);
+
+		set_transient( $this->get_identify_worker_token_key( $operation_id ), $worker_token, 7200 );
+		set_transient( $this->get_identify_worker_payload_key( $operation_id ), $payload, 7200 );
+		Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 1, __( 'Iniciando búsqueda de usuarios...', 'users-toolkit' ), false );
+
+		$scheduled  = $this->schedule_identify_worker_event( $operation_id, $worker_token, 10 );
+		$dispatched = $this->dispatch_identify_worker_request( $operation_id, $worker_token );
+
+		if ( ! $scheduled && ! $dispatched ) {
+			delete_transient( $this->get_identify_worker_token_key( $operation_id ) );
+			delete_transient( $this->get_identify_worker_payload_key( $operation_id ) );
+			Users_Toolkit_Progress_Tracker::set_progress(
+				$operation_id,
+				100,
+				__( 'No se pudo iniciar la búsqueda en segundo plano.', 'users-toolkit' ),
+				true,
+				array( 'error' => true )
+			);
+			wp_send_json_error( array( 'message' => __( 'No se pudo iniciar la búsqueda en segundo plano. Revisa loopback/WP-Cron.', 'users-toolkit' ) ) );
+		}
+
+		if ( $dispatched ) {
+			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 2, __( 'Búsqueda iniciada en segundo plano...', 'users-toolkit' ), false );
+			$message = __( 'Búsqueda iniciada. Monitoreando progreso...', 'users-toolkit' );
+		} else {
+			Users_Toolkit_Progress_Tracker::set_progress( $operation_id, 2, __( 'Búsqueda en cola (WP-Cron)...', 'users-toolkit' ), false );
+			$message = __( 'No se pudo iniciar loopback inmediato; búsqueda en cola vía WP-Cron.', 'users-toolkit' );
+		}
+
+		wp_send_json_success(
+			array(
+				'operation_id' => $operation_id,
+				'queued'       => true,
+				'scheduled'    => $scheduled,
+				'dispatched'   => $dispatched,
+				'message'      => $message,
+			)
+		);
+	}
+
+	/**
+	 * AJAX handler for processing identify worker.
+	 */
+	public function ajax_process_identify() {
+		$operation_id = isset( $_REQUEST['operation_id'] ) ? sanitize_key( wp_unslash( $_REQUEST['operation_id'] ) ) : '';
+		$worker_token = isset( $_REQUEST['worker_token'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['worker_token'] ) ) : '';
+
+		$result = $this->process_identify_operation( $operation_id, $worker_token );
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+
+		wp_send_json_success( array( 'message' => __( 'Worker de identificación ejecutado.', 'users-toolkit' ) ) );
+	}
+
+	/**
+	 * Cron fallback callback to process identify operation.
+	 *
+	 * @param string $operation_id Operation identifier.
+	 * @param string $worker_token One-time worker token.
+	 */
+	public function process_identify_event( $operation_id, $worker_token ) {
+		$this->process_identify_operation( $operation_id, $worker_token );
 	}
 
 	/**

@@ -23,7 +23,11 @@ class Users_Toolkit_Progress_Tracker {
 			'data'      => $data,
 		);
 
-		set_transient( 'users_toolkit_progress_' . $operation_id, $progress, 600 );
+		$ttl = (int) apply_filters( 'users_toolkit_progress_ttl', 7200, $operation_id, $completed );
+		if ( $ttl < 60 ) {
+			$ttl = 60;
+		}
+		set_transient( 'users_toolkit_progress_' . $operation_id, $progress, $ttl );
 	}
 
 	/**

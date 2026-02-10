@@ -20,11 +20,11 @@ class Users_Toolkit_Spam_User_Identifier {
 	public static function identify_spam_users( $operation_id = '', $criteria_positive = array(), $criteria_negative = array(), $match_all = false, $post_types_positive = array(), $post_types_negative = array(), $user_roles = array() ) {
 		global $wpdb;
 
-		// Aumentar tiempo y memoria para bases con muchos usuarios (10 minutos)
-		set_time_limit( 600 );
+		// Aumentar tiempo y memoria para bases con muchos usuarios.
+		set_time_limit( 1800 );
 		if ( function_exists( 'ini_set' ) ) {
 			@ini_set( 'memory_limit', '512M' );
-			@ini_set( 'max_execution_time', 600 );
+			@ini_set( 'max_execution_time', 1800 );
 		}
 
 		$spam_users = array();
