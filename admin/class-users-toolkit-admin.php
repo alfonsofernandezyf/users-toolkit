@@ -1305,6 +1305,34 @@ class Users_Toolkit_Admin {
 		$progress = Users_Toolkit_Progress_Tracker::get_progress( $operation_id );
 
 		if ( $progress === false ) {
+			$is_identify_pending = (
+				strpos( $operation_id, 'spam_identify_' ) === 0 &&
+				(
+					get_transient( 'users_toolkit_identify_worker_' . $operation_id ) ||
+					get_transient( 'users_toolkit_identify_payload_' . $operation_id ) ||
+					get_transient( 'users_toolkit_identify_lock_' . $operation_id )
+				)
+			);
+			$is_backup_pending = (
+				strpos( $operation_id, 'backup_' ) === 0 &&
+				(
+					get_transient( 'users_toolkit_backup_worker_' . $operation_id ) ||
+					get_transient( 'users_toolkit_backup_lock_' . $operation_id )
+				)
+			);
+
+			if ( $is_identify_pending || $is_backup_pending ) {
+				wp_send_json_success(
+					array(
+						'current'   => 2,
+						'message'   => __( 'Operación en cola o iniciando en segundo plano...', 'users-toolkit' ),
+						'completed' => false,
+						'timestamp' => time(),
+						'data'      => array(),
+					)
+				);
+			}
+
 			wp_send_json_error( array( 'message' => __( 'Progreso no encontrado', 'users-toolkit' ) ) );
 		}
 

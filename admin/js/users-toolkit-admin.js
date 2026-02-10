@@ -225,6 +225,7 @@
 									clearInterval(pollInterval);
 									startPolling(response.data.operation_id);
 								}
+								operationId = response.data.operation_id;
 								updateProgress($progressBar, $progressMsg, $progressLog, 3, response.data.message || 'Operación iniciada. Verificando progreso...');
 							} else {
 								// Operación completada inmediatamente
