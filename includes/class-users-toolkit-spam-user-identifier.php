@@ -28,14 +28,50 @@ class Users_Toolkit_Spam_User_Identifier {
 		}
 
 		$spam_users = array();
-		$all_users = $wpdb->get_col( "SELECT ID FROM {$wpdb->users} ORDER BY ID" );
-		
+		$all_users = $wpdb->get_results( "SELECT ID, user_email, user_login, user_registered FROM {$wpdb->users} ORDER BY ID", ARRAY_A );
 		$total = count( $all_users );
 		$processed = 0;
 		$has_positive_criteria = ! empty( $criteria_positive ) || ! empty( $post_types_positive );
 		$has_negative_criteria = ! empty( $criteria_negative ) || ! empty( $post_types_negative );
 		$has_role_filter = ! empty( $user_roles );
 		$use_default_inactive_mode = ! $has_positive_criteria && ! $has_negative_criteria && ! $has_role_filter;
+
+		/*
+		 * Mapa de roles/capacidades sin instanciar WP_User por cada ID.
+		 * Esto reduce uso de memoria en sitios con miles de usuarios.
+		 */
+		$capabilities_key = $wpdb->prefix . 'capabilities';
+		$cap_rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT user_id, meta_value FROM {$wpdb->usermeta} WHERE meta_key = %s",
+				$capabilities_key
+			),
+			ARRAY_A
+		);
+		$user_roles_map = array();
+		$user_caps_map = array();
+		foreach ( (array) $cap_rows as $cap_row ) {
+			$uid = isset( $cap_row['user_id'] ) ? (int) $cap_row['user_id'] : 0;
+			if ( $uid <= 0 ) {
+				continue;
+			}
+			$caps = maybe_unserialize( isset( $cap_row['meta_value'] ) ? $cap_row['meta_value'] : array() );
+			if ( ! is_array( $caps ) ) {
+				$caps = array();
+			}
+			$user_caps_map[ $uid ] = $caps;
+			$roles = array();
+			foreach ( $caps as $cap_key => $enabled ) {
+				if ( ! $enabled || ! is_string( $cap_key ) ) {
+					continue;
+				}
+				if ( strpos( $cap_key, 'level_' ) === 0 || 'manage_options' === $cap_key ) {
+					continue;
+				}
+				$roles[] = $cap_key;
+			}
+			$user_roles_map[ $uid ] = $roles;
+		}
 
 		if ( ! empty( $operation_id ) ) {
 			$criteria_desc = '';
@@ -399,7 +435,11 @@ class Users_Toolkit_Spam_User_Identifier {
 			return $comments_cache[ $uid ];
 		};
 
-		foreach ( $all_users as $user_id ) {
+		foreach ( $all_users as $user_row ) {
+			$user_id = isset( $user_row['ID'] ) ? (int) $user_row['ID'] : 0;
+			if ( $user_id <= 0 ) {
+				continue;
+			}
 			$processed++;
 			
 			// Actualizar progreso cada 50 usuarios o cada 5% del total.
@@ -408,14 +448,11 @@ class Users_Toolkit_Spam_User_Identifier {
 				Users_Toolkit_Progress_Tracker::set_progress( $operation_id, $percent, sprintf( __( 'Analizando usuarios: %d de %d (%d%%). Encontrados: %d', 'users-toolkit' ), $processed, $total, $percent, count( $spam_users ) ), false, array( 'found' => count( $spam_users ) ) );
 			}
 			
-			$user = get_user_by( 'ID', $user_id );
-			if ( ! $user ) {
-				continue;
-			}
+			$user_roles_array = isset( $user_roles_map[ $user_id ] ) && is_array( $user_roles_map[ $user_id ] ) ? $user_roles_map[ $user_id ] : array();
+			$user_caps = isset( $user_caps_map[ $user_id ] ) && is_array( $user_caps_map[ $user_id ] ) ? $user_caps_map[ $user_id ] : array();
 
 			// Filtrar por roles si se especificó
 			if ( ! empty( $user_roles ) ) {
-				$user_roles_array = $user->roles;
 				$has_matching_role = false;
 				foreach ( $user_roles as $role ) {
 					if ( in_array( $role, $user_roles_array, true ) ) {
@@ -429,7 +466,8 @@ class Users_Toolkit_Spam_User_Identifier {
 			} else {
 				// Si NO se especificó ningún rol, excluir administradores por defecto
 				// (comportamiento original para evitar mostrar admins accidentalmente)
-				if ( user_can( $user_id, 'manage_options' ) ) {
+				$is_admin = in_array( 'administrator', $user_roles_array, true ) || ! empty( $user_caps['manage_options'] );
+				if ( $is_admin ) {
 					continue;
 				}
 			}
@@ -609,8 +647,9 @@ class Users_Toolkit_Spam_User_Identifier {
 					continue; // Saltar este usuario
 				}
 				
-				$user_registered = $user->user_registered;
-				$days_old = floor( ( time() - strtotime( $user_registered ) ) / ( 60 * 60 * 24 ) );
+				$user_registered = isset( $user_row['user_registered'] ) ? (string) $user_row['user_registered'] : '';
+				$registered_ts = ! empty( $user_registered ) ? strtotime( $user_registered ) : false;
+				$days_old = $registered_ts ? floor( ( time() - $registered_ts ) / ( 60 * 60 * 24 ) ) : 0;
 
 				// Contar cursos únicos (evita duplicados entre diferentes fuentes)
 				$course_count = $count_courses_func( $user_id );
@@ -626,16 +665,26 @@ class Users_Toolkit_Spam_User_Identifier {
 
 				$spam_users[] = array(
 					'ID'         => $user_id,
-					'email'      => $user->user_email,
-					'login'      => $user->user_login,
+					'email'      => isset( $user_row['user_email'] ) ? $user_row['user_email'] : '',
+					'login'      => isset( $user_row['user_login'] ) ? $user_row['user_login'] : '',
 					'registered' => $user_registered,
 					'days_old'   => $days_old,
-					'roles'      => implode( ', ', $user->roles ),
+					'roles'      => implode( ', ', $user_roles_array ),
 					'courses'    => (int) $course_count,
 					'orders'     => (int) $orders_count,
 					'posts'      => (int) $posts_count,
 					'memberships' => (int) $memberships_count,
 				);
+			}
+
+			// Liberar memoria periódicamente en ejecuciones grandes.
+			if ( $processed % 200 === 0 ) {
+				if ( function_exists( 'wp_cache_flush_runtime' ) ) {
+					wp_cache_flush_runtime();
+				}
+				if ( function_exists( 'gc_collect_cycles' ) ) {
+					@gc_collect_cycles();
+				}
 			}
 		}
 
