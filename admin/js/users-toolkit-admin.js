@@ -365,75 +365,30 @@
 		}
 		
 		// Select all checkbox - solo seleccionar usuarios visibles
-		// Usar off() primero para evitar listeners duplicados y asegurar que sea el único listener
-		// Usar namespace para evitar conflictos con otros plugins
-		// También prevenir el comportamiento por defecto de WordPress para checkboxes en tablas
-		$(document).off('change.users-toolkit click.users-toolkit', '#users-toolkit-select-all, .users-toolkit-select-all-checkbox').on('change.users-toolkit click.users-toolkit', '#users-toolkit-select-all, .users-toolkit-select-all-checkbox', function(e) {
-			e.stopPropagation(); // Prevenir propagación
-			e.stopImmediatePropagation(); // Prevenir otros listeners
-			e.preventDefault(); // Prevenir comportamiento por defecto
-			
-			var $checkbox = $(this);
-			var isChecked = $checkbox.is(':checked');
-			
-			// Si es un click, cambiar el estado manualmente
-			if (e.type === 'click') {
-				isChecked = !isChecked;
-				$checkbox.prop('checked', isChecked);
-			}
-			
+		$(document).off('change.users-toolkit', '#users-toolkit-select-all, .users-toolkit-select-all-checkbox').on('change.users-toolkit', '#users-toolkit-select-all, .users-toolkit-select-all-checkbox', function() {
 			var $table = $('#users-toolkit-spam-table');
-			
 			if ($table.length === 0) {
-				console.warn('Users Toolkit: Tabla no encontrada');
-				return false;
+				return;
 			}
-			
-			// Obtener solo filas visibles usando filter con función para mejor compatibilidad
-			var $allRows = $table.find('tbody tr');
-			var $visibleRows = $allRows.filter(function() {
-				var $row = $(this);
-				// Verificar múltiples formas de visibilidad
-				var isVisible = $row.is(':visible') && 
-				               $row.css('display') !== 'none' && 
-				               $row.css('visibility') !== 'hidden' &&
-				               $row.width() > 0 && 
-				               $row.height() > 0;
-				return isVisible;
-			});
-			var $visibleCheckboxes = $visibleRows.find('.spam-user-checkbox');
-			var $allCheckboxes = $table.find('tbody tr .spam-user-checkbox');
-			
-			$allRows.each(function(index) {
-				var $row = $(this);
-				var isVisible = $row.is(':visible') && $row.css('display') !== 'none';
-				if (index < 5) { // Solo loggear las primeras 5 para no saturar
-				}
-			});
-			
 
-			
-			// IMPORTANTE: Solo cambiar el estado de los checkboxes visibles
-			// NO tocar los checkboxes de filas ocultas
-			$visibleCheckboxes.each(function() {
-				var $cb = $(this);
-				var wasChecked = $cb.prop('checked');
-				$cb.prop('checked', isChecked);
-			});
-			
-			// Verificar que solo se cambiaron los visibles
-			var finalChecked = $allCheckboxes.filter(':checked').length;
-			var finalVisibleChecked = $visibleCheckboxes.filter(':checked').length;
-			
+			var isChecked = $(this).prop('checked');
+			var $visibleCheckboxes = $table.find('tbody tr:visible .spam-user-checkbox');
+
+			if ($visibleCheckboxes.length === 0) {
+				$(this).prop('checked', false).prop('indeterminate', false);
+				updateVisibleCount();
+				return;
+			}
+
+			$visibleCheckboxes.prop('checked', isChecked);
+
 			// Actualizar contador y estado del checkbox
 			updateVisibleCount();
-			
+
 			// Actualizar botón después de seleccionar/deseleccionar todos
 			if (!$('#users-toolkit-apply-to-all').prop('checked')) {
 				updateActionButton();
 			}
-			
-			return false; // Prevenir cualquier otro comportamiento
 		});
 		
 		// Actualizar botón cuando cambia el selector o el checkbox - usar delegación de eventos

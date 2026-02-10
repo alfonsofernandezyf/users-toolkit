@@ -3,7 +3,7 @@
  * Plugin Name: Users Toolkit
  * Plugin URI: https://wordpress.org/plugins/users-toolkit
  * Description: Herramientas para buscar, borrar y optimizar la lista de usuarios y la base de datos de WordPress.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Alfonso Fernández (alfonso@cientifi.ca)
  * Author URI: https://cientifi.ca
  * Text Domain: users-toolkit
@@ -20,7 +20,7 @@ if ( ! defined( 'WPINC' ) ) {
 }
 
 // Define plugin constants
-define( 'USERS_TOOLKIT_VERSION', '1.3.0' );
+define( 'USERS_TOOLKIT_VERSION', '1.3.1' );
 define( 'USERS_TOOLKIT_PATH', plugin_dir_path( __FILE__ ) );
 define( 'USERS_TOOLKIT_URL', plugin_dir_url( __FILE__ ) );
 define( 'USERS_TOOLKIT_BASENAME', plugin_basename( __FILE__ ) );
