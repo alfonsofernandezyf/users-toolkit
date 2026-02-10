@@ -9,8 +9,8 @@ class Users_Toolkit_Spam_User_Identifier {
 	 * Identify spam users based on criteria
 	 *
 	 * @param string $operation_id         Optional operation ID for progress tracking
-	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads'
-	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads'
+	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email'
+	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email'
 	 * @param bool   $match_all            If true, user must match ALL criteria. If false, match ANY criterion.
 	 * @param array  $post_types_positive  Optional array of post types user must be author of
 	 * @param array  $post_types_negative  Optional array of post types user must NOT be author of
@@ -207,6 +207,7 @@ class Users_Toolkit_Spam_User_Identifier {
 		$post_type_cache = array();
 		$any_content_cache = array();
 		$dlm_downloads_count_cache = array();
+		$suspicious_email_reason_cache = array();
 
 		$activity_table = $wpdb->prefix . 'learndash_user_activity';
 		$activity_table_exists = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $activity_table ) ) === $activity_table );
@@ -310,6 +311,100 @@ class Users_Toolkit_Spam_User_Identifier {
 				$dlm_downloads_count_cache[ $uid ] = 0;
 			}
 		}
+
+		$disposable_domains = (array) apply_filters(
+			'users_toolkit_suspicious_email_disposable_domains',
+			array(
+				'mailinator.com', 'guerrillamail.com', 'sharklasers.com', 'temp-mail.org', 'tempmail.com', '10minutemail.com',
+				'yopmail.com', 'trashmail.com', 'maildrop.cc', 'dispostable.com', 'getnada.com', 'moakt.com',
+				'throwawaymail.com', 'fakeinbox.com', 'mintemail.com', 'spamgourmet.com', 'mytemp.email', 'emailondeck.com',
+				'tempr.email', 'tempinbox.com',
+			)
+		);
+		$suspicious_tlds = (array) apply_filters(
+			'users_toolkit_suspicious_email_tlds',
+			array( 'xyz', 'top', 'click', 'work', 'loan', 'gq', 'cf', 'ml', 'ga', 'tk', 'pw', 'zip', 'country', 'kim', 'ru', 'su' )
+		);
+
+		$disposable_domains_map = array_fill_keys( array_map( 'strtolower', array_filter( $disposable_domains ) ), true );
+		$suspicious_tlds_map = array_fill_keys( array_map( 'strtolower', array_filter( $suspicious_tlds ) ), true );
+
+		$get_suspicious_email_reason_func = function( $email ) use ( &$suspicious_email_reason_cache, $disposable_domains_map, $suspicious_tlds_map ) {
+			$email = strtolower( trim( (string) $email ) );
+			if ( isset( $suspicious_email_reason_cache[ $email ] ) ) {
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( empty( $email ) || ! is_email( $email ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Formato inválido de correo', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			$parts = explode( '@', $email );
+			if ( count( $parts ) !== 2 ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Estructura de correo inválida', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			$local_part = trim( $parts[0] );
+			$domain = trim( $parts[1] );
+			if ( empty( $local_part ) || empty( $domain ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Estructura de correo incompleta', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( isset( $disposable_domains_map[ $domain ] ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Dominio temporal/desechable', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( strpos( $domain, 'xn--' ) === 0 || strpos( $domain, '.xn--' ) !== false ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Dominio punycode sospechoso', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			$domain_parts = explode( '.', $domain );
+			$tld = '';
+			if ( ! empty( $domain_parts ) ) {
+				$tld = strtolower( end( $domain_parts ) );
+			}
+			if ( ! empty( $tld ) && isset( $suspicious_tlds_map[ $tld ] ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'TLD de alto riesgo', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( preg_match( '/(test|fake|spam|bot|dummy|asdf|qwerty|noreply|temp)/i', $local_part ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Alias típico de prueba/spam', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			$normalized_local = preg_replace( '/[^a-z0-9]/i', '', $local_part );
+			$digits_only = preg_replace( '/[^0-9]/', '', $normalized_local );
+			$letters_only = preg_replace( '/[^a-z]/i', '', $normalized_local );
+
+			if ( strlen( $normalized_local ) >= 11 && strlen( $digits_only ) >= 4 && strlen( $letters_only ) >= 3 ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Patrón de alias aleatorio', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( preg_match( '/(.)\1{4,}/', $local_part ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Patrón repetitivo inusual', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( preg_match( '/\d{6,}/', $local_part ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Secuencia numérica extensa', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			if ( preg_match( '/\d{4,}/', $domain ) ) {
+				$suspicious_email_reason_cache[ $email ] = __( 'Dominio con patrón numérico inusual', 'users-toolkit' );
+				return $suspicious_email_reason_cache[ $email ];
+			}
+
+			$suspicious_email_reason_cache[ $email ] = '';
+			return '';
+		};
 
 		// Función auxiliar para contar cursos únicos.
 		$count_courses_func = function( $uid ) use ( $wpdb, &$course_count_cache, $activity_table_exists, $activity_table ) {
@@ -651,6 +746,9 @@ class Users_Toolkit_Spam_User_Identifier {
 
 			// Verificar criterios positivos (debe tener)
 			$positive_matches = array();
+			$user_email = isset( $user_row['user_email'] ) ? strtolower( trim( (string) $user_row['user_email'] ) ) : '';
+			$email_suspicious_reason = $get_suspicious_email_reason_func( $user_email );
+			$has_suspicious_email = ! empty( $email_suspicious_reason );
 			if ( in_array( 'courses', $criteria_positive, true ) ) {
 				$positive_matches['courses'] = $has_courses_func( $user_id );
 			}
@@ -668,6 +766,9 @@ class Users_Toolkit_Spam_User_Identifier {
 			}
 			if ( in_array( 'dlm_downloads', $criteria_positive, true ) ) {
 				$positive_matches['dlm_downloads'] = $has_dlm_downloads_func( $user_id );
+			}
+			if ( in_array( 'suspicious_email', $criteria_positive, true ) ) {
+				$positive_matches['suspicious_email'] = $has_suspicious_email;
 			}
 			
 			// Verificar tipos de post positivos (debe ser autor de)
@@ -708,6 +809,9 @@ class Users_Toolkit_Spam_User_Identifier {
 			if ( in_array( 'dlm_downloads', $criteria_negative, true ) ) {
 				$dlm_downloads_count = $count_dlm_downloads_func( $user_id );
 				$negative_matches['dlm_downloads'] = ( $dlm_downloads_count === 0 ); // true = NO tiene descargas (cumple)
+			}
+			if ( in_array( 'suspicious_email', $criteria_negative, true ) ) {
+				$negative_matches['suspicious_email'] = ! $has_suspicious_email;
 			}
 			
 			// Verificar tipos de post negativos (NO debe ser autor de)
@@ -832,6 +936,11 @@ class Users_Toolkit_Spam_User_Identifier {
 							$passes_negative_check = false;
 						}
 					}
+					if ( in_array( 'suspicious_email', $criteria_negative, true ) ) {
+						if ( $has_suspicious_email ) {
+							$passes_negative_check = false;
+						}
+					}
 				}
 				
 				// Solo agregar si pasa la verificación adicional
@@ -873,6 +982,8 @@ class Users_Toolkit_Spam_User_Identifier {
 					'posts'      => (int) $posts_count,
 					'memberships' => (int) $memberships_count,
 					'dlm_downloads' => (int) $dlm_downloads_count,
+					'email_suspicious' => $has_suspicious_email ? 1 : 0,
+					'email_suspicious_reason' => $email_suspicious_reason,
 				);
 			}
 
@@ -929,12 +1040,16 @@ class Users_Toolkit_Spam_User_Identifier {
 			$posts = isset( $spam_user['posts'] ) ? $spam_user['posts'] : 0;
 			$memberships = isset( $spam_user['memberships'] ) ? $spam_user['memberships'] : 0;
 			$dlm_downloads = isset( $spam_user['dlm_downloads'] ) ? $spam_user['dlm_downloads'] : 0;
+			$email_suspicious = ! empty( $spam_user['email_suspicious'] ) ? __( 'Sí', 'users-toolkit' ) : __( 'No', 'users-toolkit' );
+			$email_suspicious_reason = isset( $spam_user['email_suspicious_reason'] ) ? $spam_user['email_suspicious_reason'] : '';
 			fwrite( $fp, sprintf(
-				"ID: %d | Nombre: %s %s | Email: %s | Login: %s | Roles: %s | Ciudad: %s | País: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d | Descargas DLM: %d\n",
+				"ID: %d | Nombre: %s %s | Email: %s | Correo sospechoso: %s | Motivo: %s | Login: %s | Roles: %s | Ciudad: %s | País: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d | Descargas DLM: %d\n",
 				$spam_user['ID'],
 				$first_name,
 				$last_name,
 				$spam_user['email'],
+				$email_suspicious,
+				$email_suspicious_reason,
 				$spam_user['login'],
 				$spam_user['roles'],
 				$city,

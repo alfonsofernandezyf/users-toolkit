@@ -73,6 +73,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 						<input type="checkbox" name="criteria_positive[]" value="dlm_downloads">
 						<?php esc_html_e( 'Descargas WP-DLM', 'users-toolkit' ); ?>
 					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_positive[]" value="suspicious_email">
+						<?php esc_html_e( 'Correo sospechoso', 'users-toolkit' ); ?>
+					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post -->
 					<div id="users-toolkit-post-types-positive" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #00a32a;">
@@ -123,6 +127,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 					<label style="display: block; margin: 8px 0;">
 						<input type="checkbox" name="criteria_negative[]" value="dlm_downloads">
 						<?php esc_html_e( 'Descargas WP-DLM', 'users-toolkit' ); ?>
+					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_negative[]" value="suspicious_email">
+						<?php esc_html_e( 'Correo sospechoso', 'users-toolkit' ); ?>
 					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post (negativos) -->
@@ -298,6 +306,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<?php esc_html_e( 'Email', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
 						</th>
+						<th class="sortable" data-column="email_suspicious" data-type="text">
+							<?php esc_html_e( 'Correo sospechoso', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="email_reason" data-type="text">
+							<?php esc_html_e( 'Motivo', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
 						<th class="sortable" data-column="login" data-type="text">
 							<?php esc_html_e( 'Login', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
@@ -362,6 +378,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 						$city = isset( $user['city'] ) ? (string) $user['city'] : '';
 						$country = isset( $user['country'] ) ? (string) $user['country'] : '';
 						$dlm_downloads_count = isset( $user['dlm_downloads'] ) ? (int) $user['dlm_downloads'] : 0;
+						$email_suspicious = ! empty( $user['email_suspicious'] );
+						$email_reason = isset( $user['email_suspicious_reason'] ) ? (string) $user['email_suspicious_reason'] : '';
 						$user_edit_url = admin_url( 'user-edit.php?user_id=' . $user_id );
 						
 						// URL para pedidos de WooCommerce (compatible con HPOS y legacy)
@@ -384,8 +402,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 					?>
 					<?php $memberships_count = isset( $user['memberships'] ) ? (int) $user['memberships'] : 0; ?>
 					<tr data-id="<?php echo esc_attr( $user_id ); ?>" 
-						data-email="<?php echo esc_attr( strtolower( $user['email'] ) ); ?>" 
-						data-login="<?php echo esc_attr( strtolower( $user['login'] ) ); ?>" 
+							data-email="<?php echo esc_attr( strtolower( $user['email'] ) ); ?>" 
+							data-email_suspicious="<?php echo esc_attr( $email_suspicious ? 'si' : 'no' ); ?>" 
+							data-email_reason="<?php echo esc_attr( strtolower( $email_reason ) ); ?>" 
+							data-login="<?php echo esc_attr( strtolower( $user['login'] ) ); ?>" 
 						data-first_name="<?php echo esc_attr( strtolower( $first_name ) ); ?>" 
 						data-last_name="<?php echo esc_attr( strtolower( $last_name ) ); ?>" 
 						data-city="<?php echo esc_attr( strtolower( $city ) ); ?>" 
@@ -406,8 +426,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 								<?php echo esc_html( $user_id ); ?>
 							</a>
 						</td>
-						<td><?php echo esc_html( $user['email'] ); ?></td>
-						<td><?php echo esc_html( $user['login'] ); ?></td>
+							<td><?php echo esc_html( $user['email'] ); ?></td>
+							<td>
+								<?php if ( $email_suspicious ) : ?>
+									<span style="display: inline-block; padding: 2px 8px; background: #fbeaea; color: #b32d2e; border: 1px solid #f0bfc0; border-radius: 12px; font-size: 12px; font-weight: 600;">
+										<?php esc_html_e( 'Sí', 'users-toolkit' ); ?>
+									</span>
+								<?php else : ?>
+									<span style="display: inline-block; padding: 2px 8px; background: #ecf7ed; color: #0a7a26; border: 1px solid #bfe3c6; border-radius: 12px; font-size: 12px; font-weight: 600;">
+										<?php esc_html_e( 'No', 'users-toolkit' ); ?>
+									</span>
+								<?php endif; ?>
+							</td>
+							<td><?php echo esc_html( $email_reason ); ?></td>
+							<td><?php echo esc_html( $user['login'] ); ?></td>
 						<td><?php echo esc_html( $first_name ); ?></td>
 						<td><?php echo esc_html( $last_name ); ?></td>
 						<td><?php echo esc_html( $city ); ?></td>
