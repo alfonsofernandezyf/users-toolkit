@@ -9,8 +9,8 @@ class Users_Toolkit_Spam_User_Identifier {
 	 * Identify spam users based on criteria
 	 *
 	 * @param string $operation_id         Optional operation ID for progress tracking
-	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email'
-	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email'
+	 * @param array  $criteria_positive    Optional array of positive criteria (must have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email', 'missing_profile_fields'
+	 * @param array  $criteria_negative    Optional array of negative criteria (must NOT have): 'courses', 'certificates', 'orders', 'comments', 'memberships', 'dlm_downloads', 'suspicious_email', 'missing_profile_fields'
 	 * @param bool   $match_all            If true, user must match ALL criteria. If false, match ANY criterion.
 	 * @param array  $post_types_positive  Optional array of post types user must be author of
 	 * @param array  $post_types_negative  Optional array of post types user must NOT be author of
@@ -28,7 +28,7 @@ class Users_Toolkit_Spam_User_Identifier {
 		}
 
 		$spam_users = array();
-		$all_users = $wpdb->get_results( "SELECT ID, user_email, user_login, user_registered FROM {$wpdb->users} ORDER BY ID", ARRAY_A );
+		$all_users = $wpdb->get_results( "SELECT ID, user_email, user_login, display_name, user_registered FROM {$wpdb->users} ORDER BY ID", ARRAY_A );
 		$total = count( $all_users );
 		$processed = 0;
 		$has_positive_criteria = ! empty( $criteria_positive ) || ! empty( $post_types_positive );
@@ -58,6 +58,7 @@ class Users_Toolkit_Spam_User_Identifier {
 			$user_profile_map[ $user_id ] = array(
 				'first_name' => '',
 				'last_name'  => '',
+				'display_name' => isset( $user_row['display_name'] ) ? trim( (string) $user_row['display_name'] ) : '',
 				'city'       => '',
 				'country'    => '',
 			);
@@ -406,6 +407,23 @@ class Users_Toolkit_Spam_User_Identifier {
 			return '';
 		};
 
+		$get_missing_profile_fields_func = function( $user_email, $display_name, $first_name, $last_name ) {
+			$missing_fields = array();
+			if ( '' === trim( (string) $user_email ) ) {
+				$missing_fields[] = 'email';
+			}
+			if ( '' === trim( (string) $display_name ) ) {
+				$missing_fields[] = 'display_name';
+			}
+			if ( '' === trim( (string) $first_name ) ) {
+				$missing_fields[] = 'first_name';
+			}
+			if ( '' === trim( (string) $last_name ) ) {
+				$missing_fields[] = 'last_name';
+			}
+			return $missing_fields;
+		};
+
 		// Función auxiliar para contar cursos únicos.
 		$count_courses_func = function( $uid ) use ( $wpdb, &$course_count_cache, $activity_table_exists, $activity_table ) {
 			if ( isset( $course_count_cache[ $uid ] ) ) {
@@ -744,9 +762,17 @@ class Users_Toolkit_Spam_User_Identifier {
 				}
 			}
 
+			$user_email = isset( $user_row['user_email'] ) ? strtolower( trim( (string) $user_row['user_email'] ) ) : '';
+			$user_display_name = isset( $user_row['display_name'] ) ? trim( (string) $user_row['display_name'] ) : '';
+			$user_profile = isset( $user_profile_map[ $user_id ] ) && is_array( $user_profile_map[ $user_id ] ) ? $user_profile_map[ $user_id ] : array();
+			$user_first_name = isset( $user_profile['first_name'] ) ? (string) $user_profile['first_name'] : '';
+			$user_last_name = isset( $user_profile['last_name'] ) ? (string) $user_profile['last_name'] : '';
+			$missing_profile_fields = $get_missing_profile_fields_func( $user_email, $user_display_name, $user_first_name, $user_last_name );
+			$missing_profile_fields_reason = implode( ', ', $missing_profile_fields );
+			$has_missing_profile_fields = ! empty( $missing_profile_fields );
+
 			// Verificar criterios positivos (debe tener)
 			$positive_matches = array();
-			$user_email = isset( $user_row['user_email'] ) ? strtolower( trim( (string) $user_row['user_email'] ) ) : '';
 			$email_suspicious_reason = $get_suspicious_email_reason_func( $user_email );
 			$has_suspicious_email = ! empty( $email_suspicious_reason );
 			if ( in_array( 'courses', $criteria_positive, true ) ) {
@@ -769,6 +795,9 @@ class Users_Toolkit_Spam_User_Identifier {
 			}
 			if ( in_array( 'suspicious_email', $criteria_positive, true ) ) {
 				$positive_matches['suspicious_email'] = $has_suspicious_email;
+			}
+			if ( in_array( 'missing_profile_fields', $criteria_positive, true ) ) {
+				$positive_matches['missing_profile_fields'] = $has_missing_profile_fields;
 			}
 			
 			// Verificar tipos de post positivos (debe ser autor de)
@@ -812,6 +841,9 @@ class Users_Toolkit_Spam_User_Identifier {
 			}
 			if ( in_array( 'suspicious_email', $criteria_negative, true ) ) {
 				$negative_matches['suspicious_email'] = ! $has_suspicious_email;
+			}
+			if ( in_array( 'missing_profile_fields', $criteria_negative, true ) ) {
+				$negative_matches['missing_profile_fields'] = ! $has_missing_profile_fields;
 			}
 			
 			// Verificar tipos de post negativos (NO debe ser autor de)
@@ -941,6 +973,11 @@ class Users_Toolkit_Spam_User_Identifier {
 							$passes_negative_check = false;
 						}
 					}
+					if ( in_array( 'missing_profile_fields', $criteria_negative, true ) ) {
+						if ( $has_missing_profile_fields ) {
+							$passes_negative_check = false;
+						}
+					}
 				}
 				
 				// Solo agregar si pasa la verificación adicional
@@ -964,12 +1001,12 @@ class Users_Toolkit_Spam_User_Identifier {
 				// Contar membresías WooCommerce
 				$memberships_count = $count_memberships_func( $user_id );
 				$dlm_downloads_count = $count_dlm_downloads_func( $user_id );
-				$user_profile = isset( $user_profile_map[ $user_id ] ) && is_array( $user_profile_map[ $user_id ] ) ? $user_profile_map[ $user_id ] : array();
 
 				$spam_users[] = array(
 					'ID'         => $user_id,
 					'email'      => isset( $user_row['user_email'] ) ? $user_row['user_email'] : '',
 					'login'      => isset( $user_row['user_login'] ) ? $user_row['user_login'] : '',
+					'display_name' => $user_display_name,
 					'first_name' => isset( $user_profile['first_name'] ) ? $user_profile['first_name'] : '',
 					'last_name'  => isset( $user_profile['last_name'] ) ? $user_profile['last_name'] : '',
 					'city'       => isset( $user_profile['city'] ) ? $user_profile['city'] : '',
@@ -984,6 +1021,8 @@ class Users_Toolkit_Spam_User_Identifier {
 					'dlm_downloads' => (int) $dlm_downloads_count,
 					'email_suspicious' => $has_suspicious_email ? 1 : 0,
 					'email_suspicious_reason' => $email_suspicious_reason,
+					'missing_profile_fields' => $has_missing_profile_fields ? 1 : 0,
+					'missing_profile_fields_reason' => $missing_profile_fields_reason,
 				);
 			}
 
@@ -1033,6 +1072,7 @@ class Users_Toolkit_Spam_User_Identifier {
 		foreach ( $spam_users as $spam_user ) {
 			$first_name = isset( $spam_user['first_name'] ) ? $spam_user['first_name'] : '';
 			$last_name = isset( $spam_user['last_name'] ) ? $spam_user['last_name'] : '';
+			$display_name = isset( $spam_user['display_name'] ) ? $spam_user['display_name'] : '';
 			$city = isset( $spam_user['city'] ) ? $spam_user['city'] : '';
 			$country = isset( $spam_user['country'] ) ? $spam_user['country'] : '';
 			$courses = isset( $spam_user['courses'] ) ? $spam_user['courses'] : 0;
@@ -1042,12 +1082,17 @@ class Users_Toolkit_Spam_User_Identifier {
 			$dlm_downloads = isset( $spam_user['dlm_downloads'] ) ? $spam_user['dlm_downloads'] : 0;
 			$email_suspicious = ! empty( $spam_user['email_suspicious'] ) ? __( 'Sí', 'users-toolkit' ) : __( 'No', 'users-toolkit' );
 			$email_suspicious_reason = isset( $spam_user['email_suspicious_reason'] ) ? $spam_user['email_suspicious_reason'] : '';
+			$missing_profile_fields = ! empty( $spam_user['missing_profile_fields'] ) ? __( 'Sí', 'users-toolkit' ) : __( 'No', 'users-toolkit' );
+			$missing_profile_fields_reason = isset( $spam_user['missing_profile_fields_reason'] ) ? $spam_user['missing_profile_fields_reason'] : '';
 			fwrite( $fp, sprintf(
-				"ID: %d | Nombre: %s %s | Email: %s | Correo sospechoso: %s | Motivo: %s | Login: %s | Roles: %s | Ciudad: %s | País: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d | Descargas DLM: %d\n",
+				"ID: %d | Nombre: %s %s | Display Name: %s | Email: %s | Perfil incompleto: %s | Faltan: %s | Correo sospechoso: %s | Motivo: %s | Login: %s | Roles: %s | Ciudad: %s | País: %s | Registrado: %s | Días: %d | Cursos: %d | Pedidos: %d | Posts: %d | Membresías: %d | Descargas DLM: %d\n",
 				$spam_user['ID'],
 				$first_name,
 				$last_name,
+				$display_name,
 				$spam_user['email'],
+				$missing_profile_fields,
+				$missing_profile_fields_reason,
 				$email_suspicious,
 				$email_suspicious_reason,
 				$spam_user['login'],

@@ -77,6 +77,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 						<input type="checkbox" name="criteria_positive[]" value="suspicious_email">
 						<?php esc_html_e( 'Correo sospechoso', 'users-toolkit' ); ?>
 					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_positive[]" value="missing_profile_fields">
+						<?php esc_html_e( 'Perfil incompleto (first_name, last_name, email, display_name)', 'users-toolkit' ); ?>
+					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post -->
 					<div id="users-toolkit-post-types-positive" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #00a32a;">
@@ -131,6 +135,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 					<label style="display: block; margin: 8px 0;">
 						<input type="checkbox" name="criteria_negative[]" value="suspicious_email">
 						<?php esc_html_e( 'Correo sospechoso', 'users-toolkit' ); ?>
+					</label>
+					<label style="display: block; margin: 8px 0;">
+						<input type="checkbox" name="criteria_negative[]" value="missing_profile_fields">
+						<?php esc_html_e( 'Perfil incompleto (first_name, last_name, email, display_name)', 'users-toolkit' ); ?>
 					</label>
 					
 					<!-- Checkboxes dinámicos para tipos de post (negativos) -->
@@ -293,7 +301,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 					</strong>
 				</div>
 				<div style="display: flex; gap: 8px; align-items: center;">
-					<input type="text" id="users-toolkit-search-input" placeholder="<?php esc_attr_e( 'Buscar por ID, email, login, nombre, apellido, ciudad, país, roles...', 'users-toolkit' ); ?>" style="flex: 1; padding: 8px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
+					<input type="text" id="users-toolkit-search-input" placeholder="<?php esc_attr_e( 'Buscar por ID, email, login, display_name, nombre, apellido, ciudad, país, roles...', 'users-toolkit' ); ?>" style="flex: 1; padding: 8px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 13px;">
 					<button type="button" id="users-toolkit-clear-search" class="button button-small" style="display: none; white-space: nowrap;">
 						<?php esc_html_e( 'Limpiar filtros', 'users-toolkit' ); ?>
 					</button>
@@ -336,7 +344,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 					</div>
 				</div>
 				<p style="margin: 8px 0 0 0; font-size: 12px; color: #646970;">
-					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. También puedes usar filtros rápidos por nombre, apellido, ciudad y país, incluyendo selección de varios países. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
+					<?php esc_html_e( 'Escribe para filtrar la lista en tiempo real. También puedes usar filtros rápidos por nombre, apellido, ciudad y país, incluyendo selección de varios países. Puedes buscar por display_name y campos faltantes de perfil. Haz clic en las columnas para ordenar.', 'users-toolkit' ); ?>
 				</p>
 			</div>
 			
@@ -362,8 +370,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<?php esc_html_e( 'Motivo', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
 						</th>
+						<th class="sortable" data-column="profile_incomplete" data-type="text">
+							<?php esc_html_e( 'Perfil incompleto', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="profile_missing_reason" data-type="text">
+							<?php esc_html_e( 'Campos faltantes', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
 						<th class="sortable" data-column="login" data-type="text">
 							<?php esc_html_e( 'Login', 'users-toolkit' ); ?>
+							<span class="sort-indicator"></span>
+						</th>
+						<th class="sortable" data-column="display_name" data-type="text">
+							<?php esc_html_e( 'Display Name', 'users-toolkit' ); ?>
 							<span class="sort-indicator"></span>
 						</th>
 						<th class="sortable" data-column="first_name" data-type="text">
@@ -423,11 +443,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 						$orders_count = isset( $user['orders'] ) ? (int) $user['orders'] : 0;
 						$first_name = isset( $user['first_name'] ) ? (string) $user['first_name'] : '';
 						$last_name = isset( $user['last_name'] ) ? (string) $user['last_name'] : '';
+						$display_name = isset( $user['display_name'] ) ? (string) $user['display_name'] : '';
 						$city = isset( $user['city'] ) ? (string) $user['city'] : '';
 						$country = isset( $user['country'] ) ? (string) $user['country'] : '';
 						$dlm_downloads_count = isset( $user['dlm_downloads'] ) ? (int) $user['dlm_downloads'] : 0;
 						$email_suspicious = ! empty( $user['email_suspicious'] );
 						$email_reason = isset( $user['email_suspicious_reason'] ) ? (string) $user['email_suspicious_reason'] : '';
+						$profile_incomplete = ! empty( $user['missing_profile_fields'] );
+						$profile_missing_reason = isset( $user['missing_profile_fields_reason'] ) ? (string) $user['missing_profile_fields_reason'] : '';
 						$user_edit_url = admin_url( 'user-edit.php?user_id=' . $user_id );
 						
 						// URL para pedidos de WooCommerce (compatible con HPOS y legacy)
@@ -453,7 +476,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 							data-email="<?php echo esc_attr( strtolower( $user['email'] ) ); ?>" 
 							data-email_suspicious="<?php echo esc_attr( $email_suspicious ? 'si' : 'no' ); ?>" 
 							data-email_reason="<?php echo esc_attr( strtolower( $email_reason ) ); ?>" 
+							data-profile_incomplete="<?php echo esc_attr( $profile_incomplete ? 'si' : 'no' ); ?>"
+							data-profile_missing_reason="<?php echo esc_attr( strtolower( $profile_missing_reason ) ); ?>"
 							data-login="<?php echo esc_attr( strtolower( $user['login'] ) ); ?>" 
+						data-display_name="<?php echo esc_attr( strtolower( $display_name ) ); ?>" 
 						data-first_name="<?php echo esc_attr( strtolower( $first_name ) ); ?>" 
 						data-last_name="<?php echo esc_attr( strtolower( $last_name ) ); ?>" 
 						data-city="<?php echo esc_attr( strtolower( $city ) ); ?>" 
@@ -487,7 +513,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 								<?php endif; ?>
 							</td>
 							<td><?php echo esc_html( $email_reason ); ?></td>
+							<td>
+								<?php if ( $profile_incomplete ) : ?>
+									<span style="display: inline-block; padding: 2px 8px; background: #fbeaea; color: #b32d2e; border: 1px solid #f0bfc0; border-radius: 12px; font-size: 12px; font-weight: 600;">
+										<?php esc_html_e( 'Sí', 'users-toolkit' ); ?>
+									</span>
+								<?php else : ?>
+									<span style="display: inline-block; padding: 2px 8px; background: #ecf7ed; color: #0a7a26; border: 1px solid #bfe3c6; border-radius: 12px; font-size: 12px; font-weight: 600;">
+										<?php esc_html_e( 'No', 'users-toolkit' ); ?>
+									</span>
+								<?php endif; ?>
+							</td>
+							<td><?php echo esc_html( $profile_missing_reason ); ?></td>
 							<td><?php echo esc_html( $user['login'] ); ?></td>
+						<td><?php echo esc_html( $display_name ); ?></td>
 						<td><?php echo esc_html( $first_name ); ?></td>
 						<td><?php echo esc_html( $last_name ); ?></td>
 						<td><?php echo esc_html( $city ); ?></td>
