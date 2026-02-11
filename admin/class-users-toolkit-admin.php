@@ -620,7 +620,16 @@ class Users_Toolkit_Admin {
 			wp_send_json_error( array( 'message' => __( 'Permisos insuficientes', 'users-toolkit' ) ) );
 		}
 
-		$user_ids = isset( $_POST['user_ids'] ) ? array_map( 'absint', $_POST['user_ids'] ) : array();
+		$user_ids = array();
+		if ( isset( $_POST['user_ids_json'] ) ) {
+			$user_ids_json = wp_unslash( $_POST['user_ids_json'] );
+			$decoded_ids = json_decode( $user_ids_json, true );
+			if ( is_array( $decoded_ids ) ) {
+				$user_ids = array_map( 'absint', $decoded_ids );
+			}
+		} elseif ( isset( $_POST['user_ids'] ) && is_array( $_POST['user_ids'] ) ) {
+			$user_ids = array_map( 'absint', $_POST['user_ids'] );
+		}
 
 		if ( empty( $user_ids ) ) {
 			wp_send_json_error( array( 'message' => __( 'No se proporcionaron IDs de usuario', 'users-toolkit' ) ) );
@@ -652,12 +661,16 @@ class Users_Toolkit_Admin {
 					'message'     => $message,
 					'backup_file' => $result['backup_file'],
 					'backup_url'  => $backup_url,
+					'skipped'     => isset( $result['skipped'] ) ? (int) $result['skipped'] : 0,
 				)
 			);
 		} else {
 			$message = sprintf( __( '✅ Eliminación completada: %d usuario(s) eliminados', 'users-toolkit' ), $result['deleted'] );
 			if ( $result['errors'] > 0 ) {
 				$message .= sprintf( __( ', %d error(es)', 'users-toolkit' ), $result['errors'] );
+			}
+			if ( ! empty( $result['skipped'] ) ) {
+				$message .= sprintf( __( ', %d omitido(s)', 'users-toolkit' ), $result['skipped'] );
 			}
 			
 			// Si hay usuarios restantes, indicarlo en el mensaje
@@ -677,6 +690,7 @@ class Users_Toolkit_Admin {
 					'total_requested' => isset( $result['total_requested'] ) ? $result['total_requested'] : count( $user_ids ),
 					'processed'   => isset( $result['processed'] ) ? $result['processed'] : $result['deleted'],
 					'remaining'  => isset( $result['remaining'] ) ? $result['remaining'] : 0,
+					'skipped'    => isset( $result['skipped'] ) ? (int) $result['skipped'] : 0,
 				)
 			);
 		}

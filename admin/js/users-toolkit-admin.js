@@ -418,6 +418,7 @@
 		// Esperar un momento para que la tabla se cargue completamente
 		setTimeout(function() {
 			updateActionButton();
+			showPendingDeleteResumeNotice();
 		}, 500);
 		
 		// Ejecutar acción
@@ -720,27 +721,178 @@
 			return ids;
 		}
 
-		function deleteUsers(userIds, dryRun) {
-			// SEGURIDAD: Validación estricta de dryRun
-			if (dryRun !== true && dryRun !== false) {
-				console.error('ERROR: deleteUsers llamado con dryRun inválido:', dryRun);
-				alert('Error interno: modo de simulación no válido. Operación cancelada por seguridad.');
+		var USERS_TOOLKIT_DELETE_QUEUE_KEY = 'users_toolkit_delete_queue_v1';
+		var USERS_TOOLKIT_DELETE_BATCH_SIZE = 100;
+
+		function sanitizeUserIds(ids) {
+			var result = [];
+			var seen = {};
+			(ids || []).forEach(function(id) {
+				var normalized = parseInt(id, 10);
+				if (!normalized || normalized <= 0 || seen[normalized]) {
+					return;
+				}
+				seen[normalized] = true;
+				result.push(normalized);
+			});
+			return result;
+		}
+
+		function saveDeleteQueueState(state) {
+			if (!state || state.dry_run || !Array.isArray(state.pending_ids) || state.pending_ids.length === 0) {
+				localStorage.removeItem(USERS_TOOLKIT_DELETE_QUEUE_KEY);
 				return;
 			}
-			
+			localStorage.setItem(USERS_TOOLKIT_DELETE_QUEUE_KEY, JSON.stringify(state));
+		}
+
+		function loadDeleteQueueState() {
+			try {
+				var raw = localStorage.getItem(USERS_TOOLKIT_DELETE_QUEUE_KEY);
+				if (!raw) {
+					return null;
+				}
+				var parsed = JSON.parse(raw);
+				if (!parsed || !Array.isArray(parsed.pending_ids)) {
+					return null;
+				}
+				parsed.pending_ids = sanitizeUserIds(parsed.pending_ids);
+				return parsed;
+			} catch (e) {
+				return null;
+			}
+		}
+
+		function clearDeleteQueueState() {
+			localStorage.removeItem(USERS_TOOLKIT_DELETE_QUEUE_KEY);
+		}
+
+		function showDeleteProgress(state, batchIds, message) {
 			var $results = $('#users-toolkit-delete-results');
 			var $content = $('#users-toolkit-delete-content');
+			var total = state.total || 0;
+			var processed = state.processed || 0;
+			var percent = total > 0 ? Math.min(100, Math.floor((processed / total) * 100)) : 0;
 
-			// Mostrar contenedor y mensaje de carga
-			$content.html('<p style="padding: 15px; background: #f0f6fc; border-left: 4px solid #2271b1;">⏳ ' + (dryRun ? 'Simulando eliminación...' : 'Eliminando usuarios...') + '</p>');
-			$results.removeClass('error warning success').show();
-			
-			// Scroll hasta el contenedor de resultados
+			var html = '<div class="users-toolkit-message info" style="padding: 15px; margin: 10px 0; background: #f0f6fc; border-left: 4px solid #2271b1; border-radius: 4px;">';
+			html += '<h4 style="margin-top: 0; color: #2271b1;">⏳ Procesando eliminación por lotes</h4>';
+			html += '<p><strong>' + (message || (state.dry_run ? 'Simulando eliminación...' : 'Eliminando usuarios...')) + '</strong></p>';
+			html += '<p>Progreso: <strong>' + processed + ' de ' + total + '</strong> (' + percent + '%)</p>';
+			html += '<p>Lote actual: <strong>' + batchIds.length + '</strong> usuario(s)</p>';
+			html += '<p>Pendientes: <strong>' + state.pending_ids.length + '</strong></p>';
+			html += '</div>';
+
+			$content.html(html);
+			$results.removeClass('error warning success').addClass('info').show();
+		}
+
+		function finalizeDeleteQueue(state) {
+			var $results = $('#users-toolkit-delete-results');
+			var $content = $('#users-toolkit-delete-content');
+			var dryRun = state.dry_run === true;
+			var messageClass = dryRun ? 'warning' : 'success';
+			var bgColor = dryRun ? '#f0f6fc' : '#d4edda';
+			var borderColor = dryRun ? '#2271b1' : '#00a32a';
+			var titleColor = dryRun ? '#2271b1' : '#00a32a';
+
+			var html = '<div class="users-toolkit-message ' + messageClass + '" style="padding: 15px; margin: 10px 0; background: ' + bgColor + '; border-left: 4px solid ' + borderColor + '; border-radius: 4px;">';
+			html += '<h4 style="margin-top: 0; color: ' + titleColor + ';">' + (dryRun ? '🔍 Simulación completada' : '✅ Eliminación completada') + '</h4>';
+			if (state.last_message) {
+				html += '<p><strong>' + state.last_message + '</strong></p>';
+			}
+			html += '<p><strong>Total objetivo:</strong> ' + state.total + '</p>';
+			html += '<p><strong>Procesados:</strong> ' + state.processed + '</p>';
+			html += '<p><strong>Eliminados:</strong> ' + state.deleted + '</p>';
+			html += '<p><strong>Omitidos:</strong> ' + state.skipped + '</p>';
+			html += '<p><strong>Errores:</strong> ' + state.errors + '</p>';
+
+			if (state.errors > 0 && Array.isArray(state.errors_details) && state.errors_details.length > 0) {
+				html += '<div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #f0bfc0; border-radius: 4px;">';
+				html += '<p style="margin: 0 0 6px 0; color: #b32d2e;"><strong>Primeros errores:</strong></p>';
+				html += '<ul style="margin: 0; padding-left: 18px;">';
+				state.errors_details.slice(0, 12).forEach(function(err) {
+					html += '<li style="font-size: 12px; color: #646970;">' + err + '</li>';
+				});
+				html += '</ul>';
+				html += '</div>';
+			}
+
+			if (Array.isArray(state.backup_files) && state.backup_files.length > 0) {
+				html += '<div style="margin-top: 15px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">';
+				html += '<p style="margin: 0 0 8px 0; font-weight: bold;">📦 Archivos generados:</p><ul style="margin: 0; padding-left: 18px;">';
+				state.backup_files.forEach(function(fileName) {
+					html += '<li style="font-family: monospace; font-size: 12px;">' + fileName + '</li>';
+				});
+				html += '</ul></div>';
+			}
+
+			if (dryRun) {
+				html += '<div style="margin-top: 15px; padding: 12px; background: #d1ecf1; border-left: 4px solid #2271b1; border-radius: 4px;">';
+				html += '<p style="margin: 0;"><strong>ℹ️ Esta fue una simulación. Ningún usuario fue eliminado.</strong></p>';
+				html += '</div>';
+			} else if (state.deleted > 0) {
+				html += '<div style="margin-top: 15px; padding: 12px; background: #fff3cd; border-left: 4px solid #ffb900; border-radius: 4px;">';
+				html += '<p style="margin: 0;"><strong>⏱️ La página se recargará automáticamente en 5 segundos para mostrar los cambios...</strong></p>';
+				html += '</div>';
+			}
+
+			html += '</div>';
+
+			$content.html(html);
+			$results.removeClass('error warning success info').addClass(messageClass).show();
 			$('html, body').animate({
 				scrollTop: $results.offset().top - 100
 			}, 500);
-			
-			// Log para debug
+
+			clearDeleteQueueState();
+
+			if (!dryRun && state.deleted > 0) {
+				setTimeout(function() {
+					window.location.reload();
+				}, 5000);
+			}
+		}
+
+		function showDeleteErrorState(state, message) {
+			var $results = $('#users-toolkit-delete-results');
+			var $content = $('#users-toolkit-delete-content');
+
+			var html = '<div class="users-toolkit-message error" style="padding: 15px; margin: 10px 0; background: #fbeaea; border-left: 4px solid #d63638; border-radius: 4px;">';
+			html += '<h4 style="margin-top: 0; color: #b32d2e;">❌ Error durante eliminación por lotes</h4>';
+			html += '<p><strong>' + (message || 'Ocurrió un error durante la operación.') + '</strong></p>';
+			html += '<p>Avance guardado: ' + state.processed + ' de ' + state.total + ' procesados.</p>';
+			html += '<p>Pendientes: ' + state.pending_ids.length + '</p>';
+			html += '<div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">';
+			html += '<button type="button" id="users-toolkit-resume-delete" class="button button-primary">Reanudar proceso</button>';
+			html += '<button type="button" id="users-toolkit-discard-delete" class="button">Descartar progreso</button>';
+			html += '</div>';
+			html += '</div>';
+
+			$content.html(html);
+			$results.removeClass('success warning info').addClass('error').show();
+			$('html, body').animate({
+				scrollTop: $results.offset().top - 100
+			}, 500);
+		}
+
+		function processDeleteQueue(state) {
+			var $results = $('#users-toolkit-delete-results');
+			var $content = $('#users-toolkit-delete-content');
+
+			if (!state || !Array.isArray(state.pending_ids)) {
+				showError($content, 'No se encontró estado válido para el procesamiento por lotes.');
+				$results.removeClass('success warning info').addClass('error').show();
+				return;
+			}
+
+			state.pending_ids = sanitizeUserIds(state.pending_ids);
+			if (state.pending_ids.length === 0) {
+				finalizeDeleteQueue(state);
+				return;
+			}
+
+			var batchIds = state.pending_ids.slice(0, USERS_TOOLKIT_DELETE_BATCH_SIZE);
+			showDeleteProgress(state, batchIds, state.dry_run ? 'Simulando lote...' : 'Eliminando lote...');
 
 			$.ajax({
 				url: usersToolkit.ajaxurl,
@@ -748,90 +900,130 @@
 				data: {
 					action: 'users_toolkit_delete_spam',
 					nonce: usersToolkit.nonce,
-					user_ids: userIds,
-					dry_run: dryRun === true ? 'true' : 'false' // Forzar string explícito
+					user_ids_json: JSON.stringify(batchIds),
+					batch_size: USERS_TOOLKIT_DELETE_BATCH_SIZE,
+					dry_run: state.dry_run === true ? 'true' : 'false'
 				},
 				success: function(response) {
-					if (response.success) {
-						var messageClass = dryRun ? 'info' : 'success';
-						var html = '<div class="users-toolkit-message ' + messageClass + '" style="padding: 15px; margin: 10px 0; background: ' + (dryRun ? '#f0f6fc' : '#d4edda') + '; border-left: 4px solid ' + (dryRun ? '#2271b1' : '#00a32a') + '; border-radius: 4px;">';
-						html += '<h4 style="margin-top: 0; color: ' + (dryRun ? '#2271b1' : '#00a32a') + ';">' + (dryRun ? '🔍 Resultados de Simulación' : '✅ Eliminación Completada') + '</h4>';
-						html += '<p><strong>' + response.data.message + '</strong></p>';
-						
-						if (response.data.deleted !== undefined) {
-							html += '<p><strong>Usuarios procesados:</strong> ' + response.data.deleted + '</p>';
-						}
-						
-						// Mostrar información de lotes si hay usuarios restantes
-						if (response.data.remaining !== undefined && response.data.remaining > 0) {
-							html += '<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffb900; border-radius: 3px;">';
-							html += '<p style="margin: 0;"><strong>⚠️ Procesamiento por lotes:</strong></p>';
-							html += '<p style="margin: 5px 0 0 0;">Procesados: ' + (response.data.processed || response.data.deleted) + ' de ' + (response.data.total_requested || userIds.length) + '</p>';
-							html += '<p style="margin: 5px 0 0 0;">Pendientes: ' + response.data.remaining + ' usuario(s)</p>';
-							html += '<p style="margin: 5px 0 0 0; font-size: 12px; color: #646970;">Nota: Se procesan máximo 100 usuarios por vez para evitar timeouts. Si hay más usuarios, recarga la página y vuelve a ejecutar la acción.</p>';
-							html += '</div>';
-						}
-						
-						if (response.data.errors && response.data.errors > 0) {
-							html += '<p style="color: #d63638;"><strong>⚠️ Errores:</strong> ' + response.data.errors + '</p>';
-						}
-						
-						// Mostrar información del archivo de respaldo
-						if (response.data.backup_file) {
-							var backupType = dryRun ? 'simulación' : 'respaldo';
-							html += '<div style="margin-top: 15px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">';
-							html += '<p style="margin: 0 0 8px 0; font-weight: bold;">📦 Archivo de ' + backupType + ' creado:</p>';
-							if (response.data.backup_url) {
-								html += '<p style="margin: 0;"><a href="' + response.data.backup_url + '" target="_blank" style="color: #2271b1; text-decoration: underline; font-weight: bold;">' + response.data.backup_file + '</a></p>';
-							} else {
-								html += '<p style="margin: 0; font-family: monospace; font-size: 12px;">' + response.data.backup_file + '</p>';
-							}
-							html += '<p style="margin: 8px 0 0 0; font-size: 12px; color: #646970;">';
-							html += 'Ubicación: <code>wp-content/uploads/users-toolkit/' + response.data.backup_file + '</code>';
-							html += '</p>';
-							html += '</div>';
-						}
-						
-						html += '</div>';
+					if (!response || !response.success || !response.data) {
+						state.last_message = (response && response.data && response.data.message) ? response.data.message : 'Respuesta inválida del servidor.';
+						saveDeleteQueueState(state);
+						showDeleteErrorState(state, state.last_message);
+						return;
+					}
 
-						if (!dryRun && response.data.deleted > 0) {
-							html += '<div style="margin-top: 15px; padding: 12px; background: #fff3cd; border-left: 4px solid #ffb900; border-radius: 4px;">';
-							html += '<p style="margin: 0;"><strong>⏱️ La página se recargará automáticamente en 5 segundos para mostrar los cambios...</strong></p>';
-							html += '</div>';
-							
-							setTimeout(function() {
-								window.location.reload();
-							}, 5000);
-						} else if (dryRun) {
-							html += '<div style="margin-top: 15px; padding: 12px; background: #d1ecf1; border-left: 4px solid #2271b1; border-radius: 4px;">';
-							html += '<p style="margin: 0;"><strong>ℹ️ Esta fue una simulación. Ningún usuario fue eliminado.</strong></p>';
-							html += '</div>';
-						}
+					var data = response.data;
+					var deletedInBatch = parseInt(data.deleted !== undefined ? data.deleted : (data.count || 0), 10) || 0;
+					var errorsInBatch = parseInt(data.errors || 0, 10) || 0;
+					var skippedInBatch = parseInt(data.skipped || 0, 10) || 0;
 
-						$content.html(html);
-						$results.removeClass('error warning success').addClass(dryRun ? 'warning' : 'success').show();
-						
-						// Scroll hasta el contenedor de resultados
-						$('html, body').animate({
-							scrollTop: $results.offset().top - 100
-						}, 500);
+					state.deleted += deletedInBatch;
+					state.errors += errorsInBatch;
+					state.skipped += skippedInBatch;
+					state.processed += batchIds.length;
+					state.pending_ids = state.pending_ids.slice(batchIds.length);
+					state.last_message = data.message || '';
+
+					if (Array.isArray(data.errors_details) && data.errors_details.length > 0) {
+						if (!Array.isArray(state.errors_details)) {
+							state.errors_details = [];
+						}
+						state.errors_details = state.errors_details.concat(data.errors_details).slice(-50);
+					}
+
+					if (data.backup_file) {
+						if (!Array.isArray(state.backup_files)) {
+							state.backup_files = [];
+						}
+						if (state.backup_files.indexOf(data.backup_file) === -1) {
+							state.backup_files.push(data.backup_file);
+						}
+					}
+
+					saveDeleteQueueState(state);
+
+					if (state.pending_ids.length > 0) {
+						processDeleteQueue(state);
 					} else {
-						showError($content, response.data.message || usersToolkit.strings.error);
-						$results.removeClass('success warning').addClass('error').show();
-						$('html, body').animate({
-							scrollTop: $results.offset().top - 100
-						}, 500);
+						finalizeDeleteQueue(state);
 					}
 				},
 				error: function(xhr, status, error) {
-					console.error('deleteUsers error:', xhr, status, error);
-					showError($content, usersToolkit.strings.error + ' Error de comunicación. Revisa el log de PHP.');
-					$results.removeClass('success warning').addClass('error').show();
-					$('html, body').animate({
-						scrollTop: $results.offset().top - 100
-					}, 500);
+					state.last_message = 'Error de comunicación: ' + (error || status || 'desconocido');
+					saveDeleteQueueState(state);
+					showDeleteErrorState(state, state.last_message);
 				}
 			});
+		}
+
+		$(document).off('click', '#users-toolkit-resume-delete').on('click', '#users-toolkit-resume-delete', function() {
+			var savedState = loadDeleteQueueState();
+			if (!savedState || !Array.isArray(savedState.pending_ids) || savedState.pending_ids.length === 0) {
+				alert('No hay un proceso pendiente para reanudar.');
+				clearDeleteQueueState();
+				return;
+			}
+			processDeleteQueue(savedState);
+		});
+
+		$(document).off('click', '#users-toolkit-discard-delete').on('click', '#users-toolkit-discard-delete', function() {
+			clearDeleteQueueState();
+			alert('Progreso de eliminación descartado.');
+		});
+
+		function showPendingDeleteResumeNotice() {
+			var savedState = loadDeleteQueueState();
+			if (!savedState || !Array.isArray(savedState.pending_ids) || savedState.pending_ids.length === 0) {
+				return;
+			}
+
+			var $results = $('#users-toolkit-delete-results');
+			var $content = $('#users-toolkit-delete-content');
+
+			var html = '<div class="users-toolkit-message warning" style="padding: 15px; margin: 10px 0; background: #fff3cd; border-left: 4px solid #ffb900; border-radius: 4px;">';
+			html += '<h4 style="margin-top: 0; color: #856404;">⚠️ Proceso pendiente detectado</h4>';
+			html += '<p>Hay una eliminación por lotes incompleta.</p>';
+			html += '<p>Procesados: <strong>' + (savedState.processed || 0) + '</strong> de <strong>' + (savedState.total || 0) + '</strong>.</p>';
+			html += '<p>Pendientes: <strong>' + savedState.pending_ids.length + '</strong>.</p>';
+			html += '<div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">';
+			html += '<button type="button" id="users-toolkit-resume-delete" class="button button-primary">Reanudar eliminación</button>';
+			html += '<button type="button" id="users-toolkit-discard-delete" class="button">Descartar progreso</button>';
+			html += '</div>';
+			html += '</div>';
+
+			$content.html(html);
+			$results.removeClass('error success info').addClass('warning').show();
+		}
+
+		function deleteUsers(userIds, dryRun) {
+			// SEGURIDAD: Validación estricta de dryRun
+			if (dryRun !== true && dryRun !== false) {
+				console.error('ERROR: deleteUsers llamado con dryRun inválido:', dryRun);
+				alert('Error interno: modo de simulación no válido. Operación cancelada por seguridad.');
+				return;
+			}
+
+			var normalizedIds = sanitizeUserIds(userIds);
+			if (normalizedIds.length === 0) {
+				alert('No hay usuarios válidos para procesar.');
+				return;
+			}
+
+			var deleteQueueState = {
+				dry_run: dryRun === true,
+				total: normalizedIds.length,
+				pending_ids: normalizedIds.slice(),
+				processed: 0,
+				deleted: 0,
+				skipped: 0,
+				errors: 0,
+				errors_details: [],
+				backup_files: [],
+				last_message: ''
+			};
+
+			saveDeleteQueueState(deleteQueueState);
+			processDeleteQueue(deleteQueueState);
 		}
 
 		function optimizeDatabase(actionType) {

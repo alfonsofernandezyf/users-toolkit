@@ -282,6 +282,7 @@ class Users_Toolkit_Spam_User_Cleaner {
 		
 		$deleted = 0;
 		$errors = 0;
+		$skipped = 0;
 		$errors_details = array();
 		$backup_data = array(); // Array para almacenar datos de respaldo
 
@@ -289,6 +290,7 @@ class Users_Toolkit_Spam_User_Cleaner {
 			return array(
 				'deleted' => 0,
 				'errors'  => 0,
+				'skipped' => 0,
 				'errors_details' => array( 'No se proporcionaron IDs de usuario' ),
 				'backup_file' => false,
 				'total_requested' => $total_users,
@@ -306,8 +308,7 @@ class Users_Toolkit_Spam_User_Cleaner {
 
 			$user = get_user_by( 'ID', $user_id );
 			if ( ! $user ) {
-				$errors++;
-				$errors_details[] = "Usuario ID {$user_id} no existe";
+				$skipped++;
 				continue;
 			}
 
@@ -385,7 +386,6 @@ class Users_Toolkit_Spam_User_Cleaner {
 				if ( $result ) {
 					$deleted++;
 				} else {
-					$errors++;
 					$reason = '';
 					if ( $has_content ) {
 						$reason = ' (tenía contenido';
@@ -401,9 +401,8 @@ class Users_Toolkit_Spam_User_Cleaner {
 					if ( ! $user_check ) {
 						// El usuario ya no existe, probablemente fue eliminado
 						$deleted++;
-						$errors--; // Descontar el error ya que el usuario ya fue eliminado
-						array_pop( $errors_details ); // Remover el último error
 					} else {
+						$errors++;
 						$errors_details[] = "Error al eliminar usuario ID {$user_id} - {$user->user_email}{$reason}";
 					}
 				}
@@ -428,6 +427,7 @@ class Users_Toolkit_Spam_User_Cleaner {
 		return array(
 			'deleted'        => $deleted,
 			'errors'         => $errors,
+			'skipped'        => $skipped,
 			'errors_details' => $errors_details,
 			'backup_file'    => $backup_file,
 			'backup_path'    => $backup_file_path ? dirname( $backup_file_path ) : false,
